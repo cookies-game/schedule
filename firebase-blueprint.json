@@ -1,0 +1,117 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile document",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 1024 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email"]
+    },
+    "Calendar": {
+      "title": "Calendar",
+      "description": "Shared calendar space created by a user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 500 },
+        "color": { "type": "string", "maxLength": 30 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "ownerUsername": { "type": "string", "maxLength": 128 },
+        "ownerEmail": { "type": "string", "maxLength": 256 },
+        "ownerName": { "type": "string", "maxLength": 128 },
+        "memberIds": { "type": "array" },
+        "memberUsernames": { "type": "array" },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "name", "ownerId", "ownerEmail"]
+    },
+    "CalendarMember": {
+      "title": "CalendarMember",
+      "description": "User membership and permissions in a calendar",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["owner", "admin", "member"] },
+        "joinedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "email", "role"]
+    },
+    "ScheduleEvent": {
+      "title": "ScheduleEvent",
+      "description": "Schedule event or paid leave entry on a calendar",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "calendarId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 150 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "startDate": { "type": "string", "maxLength": 30 },
+        "endDate": { "type": "string", "maxLength": 30 },
+        "startTime": { "type": "string", "maxLength": 10 },
+        "endTime": { "type": "string", "maxLength": 10 },
+        "isAllDay": { "type": "boolean" },
+        "isPaidLeave": { "type": "boolean" },
+        "paidLeaveDays": { "type": "number" },
+        "creatorId": { "type": "string", "maxLength": 128 },
+        "creatorName": { "type": "string", "maxLength": 128 },
+        "creatorEmail": { "type": "string", "maxLength": 256 },
+        "targetUserId": { "type": "string", "maxLength": 128 },
+        "targetUserName": { "type": "string", "maxLength": 128 },
+        "targetUserEmail": { "type": "string", "maxLength": 256 },
+        "color": { "type": "string", "maxLength": 30 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "calendarId", "title", "startDate", "creatorId", "targetUserId"]
+    },
+    "PaidLeaveBalance": {
+      "title": "PaidLeaveBalance",
+      "description": "Granted and remaining paid leave balance per user for a calendar",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "userEmail": { "type": "string", "maxLength": 256 },
+        "userName": { "type": "string", "maxLength": 128 },
+        "totalGranted": { "type": "number" },
+        "used": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 300 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "totalGranted"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document"
+    },
+    "/calendars/{calendarId}": {
+      "schema": "Calendar",
+      "description": "Calendar workspace metadata and access list"
+    },
+    "/calendars/{calendarId}/members/{memberId}": {
+      "schema": "CalendarMember",
+      "description": "Subcollection of members belonging to the calendar"
+    },
+    "/calendars/{calendarId}/events/{eventId}": {
+      "schema": "ScheduleEvent",
+      "description": "Subcollection of schedule events and PTO entries"
+    },
+    "/calendars/{calendarId}/paidLeaveBalances/{userId}": {
+      "schema": "PaidLeaveBalance",
+      "description": "Subcollection of paid leave balances for users in this calendar"
+    }
+  }
+}

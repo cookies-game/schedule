@@ -1,0 +1,511 @@
+import React, { useState, useEffect } from 'react';
+import { User } from 'firebase/auth';
+import { Calendar as CalendarType, ScheduleEvent } from '../types';
+import {
+  X,
+  Calendar as CalendarIcon,
+  Clock,
+  User as UserIcon,
+  Trash2,
+  Check,
+  Palmtree,
+  Shield,
+  AlertCircle,
+  Lock,
+} from 'lucide-react';
+
+import { getDisplayUsername } from '../utils/authHelper';
+
+interface EventModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  event: ScheduleEvent | null; // null for new event
+  initialDate?: string;
+  calendar: CalendarType;
+  currentUser: User;
+  onSave: (eventData: Omit<ScheduleEvent, 'id' | 'calendarId' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  onDelete?: (eventId: string) => Promise<void>;
+}
+
+const EVENT_COLORS = [
+  '#4f46e5', // Indigo
+  '#059669', // Emerald (Paid Leave default)
+  '#d97706', // Amber
+  '#e11d48', // Rose
+  '#0284c7', // Sky
+  '#7c3aed', // Purple
+];
+
+export const EventModal: React.FC<EventModalProps> = ({
+  isOpen,
+  onClose,
+  event,
+  initialDate,
+  calendar,
+  currentUser,
+  onSave,
+  onDelete,
+}) => {
+  const isOwner = calendar.ownerId === currentUser.uid;
+
+  // Check edit permission:
+  // Admin can edit all events. Non-admin can only edit if targetUserId === currentUser.uid
+  const canEdit = !event || isOwner || event.targetUserId === currentUser.uid;
+
+  // Form states
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState(initialDate || new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(initialDate || new Date().toISOString().split('T')[0]);
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime, setEndTime] = useState('18:00');
+  const [isAllDay, setIsAllDay] = useState(true);
+  const [isPaidLeave, setIsPaidLeave] = useState(false);
+  const [paidLeaveDays, setPaidLeaveDays] = useState<number>(1);
+  const [color, setColor] = useState(EVENT_COLORS[0]);
+
+  const currentUsername = getDisplayUsername(currentUser.email, currentUser.displayName);
+
+  // Target member state (who is this event for)
+  const [targetUserId, setTargetUserId] = useState<string>(currentUser.uid);
+  const [targetUserName, setTargetUserName] = useState<string>(currentUsername);
+  const [targetUserEmail, setTargetUserEmail] = useState<string>(currentUser.email || '');
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Build member choices: Owner + members
+  const ownerUname = calendar.ownerUsername || getDisplayUsername(calendar.ownerEmail, calendar.ownerName);
+  const rawMembers = calendar.memberUsernames && calendar.memberUsernames.length > 0
+    ? calendar.memberUsernames
+    : (calendar.memberEmails || []).map((e) => getDisplayUsername(e, null));
+
+  const memberOptions = [
+    {
+      id: calendar.ownerId,
+      name: ownerUname,
+      email: calendar.ownerEmail,
+      isOwner: true,
+    },
+    ...rawMembers.map((uname) => ({
+      id: uname,
+      name: uname,
+      email: uname,
+      isOwner: false,
+    })),
+  ];
+
+  useEffect(() => {
+    if (event) {
+      setTitle(event.title);
+      setDescription(event.description || '');
+      setStartDate(event.startDate);
+      setEndDate(event.endDate);
+      setStartTime(event.startTime || '09:00');
+      setEndTime(event.endTime || '18:00');
+      setIsAllDay(event.isAllDay);
+      setIsPaidLeave(event.isPaidLeave);
+      setPaidLeaveDays(event.paidLeaveDays || 1);
+      setColor(event.color || EVENT_COLORS[0]);
+      setTargetUserId(event.targetUserId);
+      setTargetUserName(event.targetUserName);
+      setTargetUserEmail(event.targetUserEmail);
+    } else {
+      const defaultDate = initialDate || new Date().toISOString().split('T')[0];
+      setTitle('');
+      setDescription('');
+      setStartDate(defaultDate);
+      setEndDate(defaultDate);
+      setStartTime('09:00');
+      setEndTime('18:00');
+      setIsAllDay(true);
+      setIsPaidLeave(false);
+      setPaidLeaveDays(1);
+      setColor(EVENT_COLORS[0]);
+      setTargetUserId(currentUser.uid);
+      setTargetUserName(currentUsername);
+      setTargetUserEmail(currentUser.email || '');
+    }
+    setError(null);
+  }, [event, initialDate, currentUser, isOpen]);
+
+  if (!isOpen) return null;
+
+  const handlePaidLeaveToggle = (checked: boolean) => {
+    setIsPaidLeave(checked);
+    if (checked) {
+      if (!title || title === '') {
+        setTitle('有給休暇');
+      }
+      setColor('#059669'); // Emerald green
+      setIsAllDay(true);
+    } else {
+      if (title === '有給休暇') {
+        setTitle('');
+      }
+      setColor(EVENT_COLORS[0]);
+    }
+  };
+
+  const handleMemberSelect = (val: string) => {
+    const selected = memberOptions.find((m) => m.id === val || m.email === val);
+    if (selected) {
+      setTargetUserId(selected.id);
+      setTargetUserName(selected.name);
+      setTargetUserEmail(selected.email);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !canEdit) return;
+
+    setError(null);
+    setLoading(true);
+
+    try {
+      await onSave({
+        title: title.trim(),
+        description: description.trim(),
+        startDate,
+        endDate: endDate >= startDate ? endDate : startDate,
+        startTime: isAllDay ? undefined : startTime,
+        endTime: isAllDay ? undefined : endTime,
+        isAllDay,
+        isPaidLeave,
+        paidLeaveDays: isPaidLeave ? paidLeaveDays : 0,
+        color,
+        creatorId: currentUser.uid,
+        creatorName: currentUsername,
+        creatorEmail: currentUser.email || '',
+        targetUserId,
+        targetUserName,
+        targetUserEmail,
+      });
+      onClose();
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || '保存に失敗しました');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!event || !onDelete || !canEdit) return;
+    if (!window.confirm('この予定を削除してもよろしいですか？')) return;
+
+    setLoading(true);
+    try {
+      await onDelete(event.id);
+      onClose();
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || '削除に失敗しました');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl transition-all border border-slate-100 max-h-[92vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div
+              className="p-2 rounded-xl text-white"
+              style={{ backgroundColor: isPaidLeave ? '#059669' : color }}
+            >
+              {isPaidLeave ? <Palmtree className="w-5 h-5" /> : <CalendarIcon className="w-5 h-5" />}
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-800">
+                {event ? (canEdit ? '予定の編集' : '予定の詳細') : '新しい予定の登録'}
+              </h2>
+              <p className="text-xs text-slate-500 font-medium">{calendar.name}</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Read-only banner if user cannot edit */}
+        {!canEdit && (
+          <div className="mt-3 p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs flex items-center gap-2 shrink-0">
+            <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              <strong>閲覧のみ:</strong> この予定は「{event?.targetUserName}」さんのスケジュールです。管理者以外のメンバーは自分の予定のみ変更できます。
+            </span>
+          </div>
+        )}
+
+        {error && (
+          <div className="mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 shrink-0">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* Form Body */}
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4 overflow-y-auto pr-1 flex-1">
+          {/* Paid Leave Highlight Option */}
+          <div className="p-3.5 rounded-xl bg-emerald-50/80 border border-emerald-200">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  disabled={!canEdit}
+                  checked={isPaidLeave}
+                  onChange={(e) => handlePaidLeaveToggle(e.target.checked)}
+                  className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500"
+                />
+                <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                  <Palmtree className="w-4 h-4 text-emerald-600" />
+                  有給休暇 (PTO) として登録する
+                </span>
+              </label>
+
+              {isPaidLeave && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={!canEdit}
+                    onClick={() => setPaidLeaveDays(1)}
+                    className={`px-2 py-1 text-[11px] font-semibold rounded-lg transition ${
+                      paidLeaveDays === 1
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-white text-emerald-800 border border-emerald-200'
+                    }`}
+                  >
+                    1日 (全休)
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canEdit}
+                    onClick={() => setPaidLeaveDays(0.5)}
+                    className={`px-2 py-1 text-[11px] font-semibold rounded-lg transition ${
+                      paidLeaveDays === 0.5
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-white text-emerald-800 border border-emerald-200'
+                    }`}
+                  >
+                    0.5日 (半休)
+                  </button>
+                </div>
+              )}
+            </div>
+            {isPaidLeave && (
+              <p className="text-[11px] text-emerald-800 mt-2">
+                ※ 有給として登録すると、カレンダー上でハイライト表示され、有給残数管理に自動集計されます。
+              </p>
+            )}
+          </div>
+
+          {/* Title */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              タイトル <span className="text-rose-500">*</span>
+            </label>
+            <input
+              type="text"
+              required
+              disabled={!canEdit}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={isPaidLeave ? '有給休暇' : '予定のタイトルを入力'}
+              className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:bg-slate-50 disabled:text-slate-500"
+            />
+          </div>
+
+          {/* Target Member (Role-based: Admin can assign anyone; member locked to self) */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                <UserIcon className="w-3.5 h-3.5 text-slate-400" />
+                対象メンバー
+              </span>
+              {isOwner ? (
+                <span className="text-[10px] text-amber-700 font-medium flex items-center gap-0.5">
+                  <Shield className="w-2.5 h-2.5" />
+                  管理者は全員の予定を設定・変更可能
+                </span>
+              ) : (
+                <span className="text-[10px] text-slate-400 font-medium">自分の予定のみ設定可能</span>
+              )}
+            </label>
+
+            {isOwner && canEdit ? (
+              <select
+                value={targetUserId}
+                onChange={(e) => handleMemberSelect(e.target.value)}
+                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              >
+                {memberOptions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} ({m.email}) {m.isOwner ? '★管理者' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="px-3 py-2 text-xs rounded-xl border border-slate-200 bg-slate-50 text-slate-700 font-medium flex items-center justify-between">
+                <span>{targetUserName} ({targetUserEmail})</span>
+                <span className="text-[10px] text-slate-400">固定</span>
+              </div>
+            )}
+          </div>
+
+          {/* Dates & Times */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-700">日時設定</span>
+              <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                <input
+                  type="checkbox"
+                  disabled={!canEdit}
+                  checked={isAllDay}
+                  onChange={(e) => setIsAllDay(e.target.checked)}
+                  className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300"
+                />
+                終日
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] text-slate-500 mb-1">開始日</label>
+                <input
+                  type="date"
+                  required
+                  disabled={!canEdit}
+                  value={startDate}
+                  onChange={(e) => {
+                    setStartDate(e.target.value);
+                    if (endDate < e.target.value) setEndDate(e.target.value);
+                  }}
+                  className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:bg-slate-50"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-500 mb-1">終了日</label>
+                <input
+                  type="date"
+                  required
+                  disabled={!canEdit}
+                  value={endDate}
+                  min={startDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:bg-slate-50"
+                />
+              </div>
+            </div>
+
+            {!isAllDay && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-slate-500 mb-1 flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    開始時間
+                  </label>
+                  <input
+                    type="time"
+                    disabled={!canEdit}
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:bg-slate-50"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-500 mb-1 flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    終了時間
+                  </label>
+                  <input
+                    type="time"
+                    disabled={!canEdit}
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:bg-slate-50"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">説明・メモ</label>
+            <textarea
+              rows={2}
+              disabled={!canEdit}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="詳細情報や連絡事項など"
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:bg-slate-50"
+            />
+          </div>
+
+          {/* Color tag */}
+          {!isPaidLeave && canEdit && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">カラーラベル</label>
+              <div className="flex items-center gap-2">
+                {EVENT_COLORS.map((c) => (
+                  <button
+                    type="button"
+                    key={c}
+                    onClick={() => setColor(c)}
+                    style={{ backgroundColor: c }}
+                    className="w-6 h-6 rounded-full flex items-center justify-center transition ring-2 ring-offset-1 ring-transparent"
+                  >
+                    {color === c && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Footer Actions */}
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-between shrink-0">
+            {event && canEdit ? (
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={loading}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>削除</span>
+              </button>
+            ) : (
+              <span />
+            )}
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition"
+              >
+                {canEdit ? 'キャンセル' : '閉じる'}
+              </button>
+              {canEdit && (
+                <button
+                  type="submit"
+                  disabled={loading || !title.trim()}
+                  className="px-5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition disabled:opacity-50"
+                >
+                  {loading ? '保存中...' : event ? '更新する' : '登録する'}
+                </button>
+              )}
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};

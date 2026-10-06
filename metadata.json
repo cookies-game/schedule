@@ -1,0 +1,8 @@
+{
+  "name": "Schedule",
+  "description": "Schedule application imported from cookies-game/schedule",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isCalendarOwner(calendarId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/calendars/$(calendarId)) &&
+        get(/databases/$(database)/documents/calendars/$(calendarId)).data.ownerId == request.auth.uid;
+    }
+
+    function isCalendarMember(calendarId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/calendars/$(calendarId)) &&
+        (
+          get(/databases/$(database)/documents/calendars/$(calendarId)).data.ownerId == request.auth.uid ||
+          (request.auth.uid in get(/databases/$(database)/documents/calendars/$(calendarId)).data.memberIds) ||
+          (request.auth.token.email != null && get(/databases/$(database)/documents/calendars/$(calendarId)).data.memberEmails.hasAny([request.auth.token.email]))
+        );
+    }
+
+    // User profile documents
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Calendars
+    match /calendars/{calendarId} {
+      allow get: if isSignedIn() && (
+        resource.data.ownerId == request.auth.uid ||
+        (request.auth.uid in resource.data.memberIds) ||
+        (request.auth.token.email != null && resource.data.memberEmails.hasAny([request.auth.token.email]))
+      );
+
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 &&
+        request.resource.data.name.size() <= 100;
+
+      allow update: if isSignedIn() && (
+        // Calendar creator/admin can update all fields
+        resource.data.ownerId == request.auth.uid ||
+        // Members or invited users can update member list when accepting invite
+        (
+          (request.auth.uid in resource.data.memberIds || (request.auth.token.email != null && resource.data.memberEmails.hasAny([request.auth.token.email]))) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds', 'memberEmails', 'memberUsernames', 'updatedAt'])
+        )
+      );
+
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      // Calendar members subcollection
+      match /members/{memberId} {
+        allow read: if isCalendarMember(calendarId);
+        allow write: if isCalendarOwner(calendarId) || (isSignedIn() && request.auth.uid == memberId);
+      }
+
+      // Schedule events & PTO subcollection
+      match /events/{eventId} {
+        allow read: if isCalendarMember(calendarId);
+
+        // Calendar creator (admin) can create for anyone. Non-admin can only create for themselves.
+        allow create: if isCalendarMember(calendarId) && (
+          isCalendarOwner(calendarId) ||
+          request.resource.data.targetUserId == request.auth.uid
+        );
+
+        // Calendar creator (admin) can update/delete any event.
+        // Non-admin can ONLY update/delete their own event (targetUserId == request.auth.uid).
+        allow update: if isCalendarMember(calendarId) && (
+          isCalendarOwner(calendarId) ||
+          resource.data.targetUserId == request.auth.uid
+        );
+
+        allow delete: if isCalendarMember(calendarId) && (
+          isCalendarOwner(calendarId) ||
+          resource.data.targetUserId == request.auth.uid
+        );
+      }
+
+      // Paid leave balance subcollection
+      match /paidLeaveBalances/{targetUserId} {
+        allow read: if isCalendarMember(calendarId);
+        // Calendar creator can manage all balances; user can update their own used days
+        allow write: if isCalendarMember(calendarId) && (
+          isCalendarOwner(calendarId) ||
+          request.auth.uid == targetUserId
+        );
+      }
+    }
+  }
+}
