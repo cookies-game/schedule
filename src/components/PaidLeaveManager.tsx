@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   CalendarCheck2,
   User as UserIcon,
+  Trash2,
 } from 'lucide-react';
 import { getDisplayUsername } from '../utils/authHelper';
 
@@ -19,9 +20,11 @@ interface PaidLeaveManagerProps {
   currentUser: User;
   events: ScheduleEvent[];
   balances: Record<string, PaidLeaveBalance>;
+  isEffectiveAdmin?: boolean;
   onUpdateGrant: (userId: string, granted: number, userEmail: string, userName: string) => Promise<void>;
   onOpenNewLeaveModal: (targetUserId?: string, targetUserName?: string, targetUserEmail?: string) => void;
   onEditEvent: (event: ScheduleEvent) => void;
+  onDeleteEvent?: (eventId: string) => Promise<void>;
 }
 
 export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
@@ -29,16 +32,26 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
   currentUser,
   events,
   balances,
+  isEffectiveAdmin,
   onUpdateGrant,
   onOpenNewLeaveModal,
   onEditEvent,
+  onDeleteEvent,
 }) => {
-  const isOwner = calendar.ownerId === currentUser.uid;
+  const currentUsername = getDisplayUsername(currentUser.email, currentUser.displayName);
+
+  const realIsOwner =
+    calendar.ownerId === currentUser.uid ||
+    (calendar.ownerEmail && currentUser.email && calendar.ownerEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+    (calendar.ownerUsername && currentUsername && calendar.ownerUsername.toLowerCase() === currentUsername.toLowerCase());
+
+  const isOwner = isEffectiveAdmin !== undefined ? isEffectiveAdmin : realIsOwner;
 
   // Editing granted days inline state (admin only)
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editGrantedVal, setEditGrantedVal] = useState<number>(20);
   const [filterMember, setFilterMember] = useState<string>('all');
+  const [deletingLeaveId, setDeletingLeaveId] = useState<string | null>(null);
 
   // List of all members in calendar
   const ownerUname = calendar.ownerUsername || getDisplayUsername(calendar.ownerEmail, calendar.ownerName);
@@ -64,10 +77,17 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
   // Filter paid leave events only
   const paidLeaveEvents = events.filter((e) => e.isPaidLeave);
 
-  // Calculate used days per member
-  const getUsedDays = (memberId: string, memberEmail: string) => {
+  // Calculate used days per member (ONLY for the target user taking the leave, NEVER creatorId)
+  const getUsedDays = (memberId: string, memberName: string) => {
     return paidLeaveEvents
-      .filter((e) => e.targetUserId === memberId || e.targetUserEmail?.toLowerCase() === memberEmail.toLowerCase())
+      .filter((e) => {
+        const matchesId = e.targetUserId === memberId;
+        const matchesName =
+          e.targetUserName && memberName && e.targetUserName.toLowerCase() === memberName.toLowerCase();
+        const matchesEmail =
+          e.targetUserEmail && memberName && e.targetUserEmail.toLowerCase() === memberName.toLowerCase();
+        return matchesId || matchesName || matchesEmail;
+      })
       .reduce((acc, curr) => acc + (curr.paidLeaveDays || 1), 0);
   };
 
@@ -77,7 +97,7 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
   };
 
   // Current user's stats
-  const myUsed = getUsedDays(currentUser.uid, currentUser.email || '');
+  const myUsed = getUsedDays(currentUser.uid, currentUsername);
   const myGranted = getGrantedDays(currentUser.uid);
   const myRemaining = Math.max(0, myGranted - myUsed);
   const myUsageRate = myGranted > 0 ? Math.round((myUsed / myGranted) * 100) : 0;
@@ -86,13 +106,27 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
   const sortedLeaves = [...paidLeaveEvents].sort((a, b) => a.startDate.localeCompare(b.startDate));
   const filteredLeaves = sortedLeaves.filter((l) => {
     if (filterMember === 'all') return true;
-    return l.targetUserId === filterMember || l.targetUserEmail === filterMember;
+    return (
+      l.targetUserId === filterMember ||
+      l.targetUserEmail === filterMember ||
+      (l.targetUserName && l.targetUserName.toLowerCase() === filterMember.toLowerCase())
+    );
   });
 
   const handleSaveGrant = async (memberId: string, email: string, name: string) => {
     if (isNaN(editGrantedVal) || editGrantedVal < 0) return;
     await onUpdateGrant(memberId, editGrantedVal, email, name);
     setEditingUserId(null);
+  };
+
+  const handleExecuteDeleteLeave = async (leaveId: string) => {
+    if (!onDeleteEvent) return;
+    try {
+      await onDeleteEvent(leaveId);
+      setDeletingLeaveId(null);
+    } catch (err) {
+      console.error('有給削除エラー:', err);
+    }
   };
 
   return (
@@ -135,8 +169,8 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
             </div>
           </div>
           <button
-            onClick={() => onOpenNewLeaveModal(currentUser.uid, currentUser.displayName || undefined, currentUser.email || undefined)}
-            className="w-full py-2 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5"
+            onClick={() => onOpenNewLeaveModal(currentUser.uid, currentUsername, currentUser.email || undefined)}
+            className="w-full py-2 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>有給休暇を申請・登録</span>
@@ -171,11 +205,11 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
             <p className="text-[11px] text-slate-600 leading-relaxed">
               {isOwner ? (
                 <strong className="text-amber-800">
-                  あなたは管理者です。全メンバーの有給付与日数の設定や有給の変更・削除が可能です。
+                  あなたは管理者です。全員の有給やスケジュールの変更・削除、付与日数の設定が可能です。
                 </strong>
               ) : (
                 <span>
-                  メンバー権限です。自分の有給予定のみ登録・編集・削除が可能です。
+                  メンバー権限です。自分の有給・スケジュールのみ登録・変更・削除が可能です。
                 </span>
               )}
             </p>
@@ -201,7 +235,7 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
 
           <button
             onClick={() => onOpenNewLeaveModal()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow-xs transition"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>有給休暇を登録</span>
@@ -222,11 +256,14 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {members.map((member) => {
-                const used = getUsedDays(member.id, member.email);
+                const used = getUsedDays(member.id, member.name);
                 const granted = getGrantedDays(member.id);
                 const remaining = Math.max(0, granted - used);
                 const isEditing = editingUserId === member.id;
-                const isCurrent = member.id === currentUser.uid || member.email.toLowerCase() === currentUser.email?.toLowerCase();
+                const isCurrent =
+                  member.id === currentUser.uid ||
+                  member.name.toLowerCase() === currentUsername.toLowerCase() ||
+                  member.email.toLowerCase() === currentUser.email?.toLowerCase();
 
                 return (
                   <tr key={member.id} className="hover:bg-slate-50/70 transition">
@@ -240,7 +277,7 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
                             <span>{member.name}</span>
                             {isCurrent && <span className="text-[10px] text-slate-400">(あなた)</span>}
                           </div>
-                          <div className="text-[11px] text-slate-400">{member.email}</div>
+                          <div className="text-[11px] text-slate-400">@{member.name}</div>
                         </div>
                       </div>
                     </td>
@@ -272,7 +309,7 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
                           />
                           <button
                             onClick={() => handleSaveGrant(member.id, member.email, member.name)}
-                            className="p-1 bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                            className="p-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 cursor-pointer"
                           >
                             <Check className="w-3.5 h-3.5" />
                           </button>
@@ -287,7 +324,7 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
                                 setEditGrantedVal(granted);
                               }}
                               title="付与日数を編集"
-                              className="p-1 text-slate-400 hover:text-slate-600 rounded transition"
+                              className="p-1 text-slate-400 hover:text-slate-600 rounded transition cursor-pointer"
                             >
                               <Edit2 className="w-3 h-3" />
                             </button>
@@ -320,7 +357,7 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
                       {(isOwner || isCurrent) && (
                         <button
                           onClick={() => onOpenNewLeaveModal(member.id, member.name, member.email)}
-                          className="px-2.5 py-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition"
+                          className="px-2.5 py-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition cursor-pointer"
                         >
                           + 有給登録
                         </button>
@@ -382,8 +419,16 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredLeaves.map((leave) => {
-                  const canEditThis = isOwner || leave.targetUserId === currentUser.uid;
+                  const isMyLeave =
+                    leave.targetUserId === currentUser.uid ||
+                    leave.creatorId === currentUser.uid ||
+                    (leave.targetUserName && currentUsername && leave.targetUserName.toLowerCase() === currentUsername.toLowerCase()) ||
+                    (leave.targetUserEmail && currentUser.email && leave.targetUserEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+                    (leave.creatorEmail && currentUser.email && leave.creatorEmail.toLowerCase() === currentUser.email.toLowerCase());
+
+                  const canEditThis = isOwner || isMyLeave;
                   const isPast = leave.endDate < new Date().toISOString().split('T')[0];
+                  const isConfirming = deletingLeaveId === leave.id;
 
                   return (
                     <tr key={leave.id} className="hover:bg-slate-50/70 transition">
@@ -408,7 +453,7 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
                         <div className="flex items-center gap-1.5 font-medium text-slate-800">
                           <UserIcon className="w-3.5 h-3.5 text-slate-400" />
                           <span>{leave.targetUserName}</span>
-                          <span className="text-[11px] text-slate-400">({leave.targetUserEmail})</span>
+                          <span className="text-[11px] text-slate-400">(@{leave.targetUserName})</span>
                         </div>
                       </td>
 
@@ -427,16 +472,45 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
                       </td>
 
                       <td className="py-3 px-4 text-right">
-                        <button
-                          onClick={() => onEditEvent(leave)}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${
-                            canEditThis
-                              ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                              : 'text-slate-400 hover:bg-slate-50'
-                          }`}
-                        >
-                          {canEditThis ? '編集・変更' : '詳細'}
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => onEditEvent(leave)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${
+                              canEditThis
+                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                                : 'text-slate-400 hover:bg-slate-50'
+                            }`}
+                          >
+                            {canEditThis ? '編集・変更' : '詳細'}
+                          </button>
+
+                          {canEditThis && onDeleteEvent && (
+                            isConfirming ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleExecuteDeleteLeave(leave.id)}
+                                  className="px-2 py-1 text-[10px] font-bold text-white bg-rose-600 hover:bg-rose-700 rounded transition cursor-pointer"
+                                >
+                                  削除実行
+                                </button>
+                                <button
+                                  onClick={() => setDeletingLeaveId(null)}
+                                  className="px-1.5 py-1 text-[10px] text-slate-600 hover:bg-slate-200 rounded transition cursor-pointer"
+                                >
+                                  取消
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setDeletingLeaveId(leave.id)}
+                                title="有給を削除"
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

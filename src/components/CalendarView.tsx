@@ -10,8 +10,9 @@ import {
   Shield,
   Calendar as CalendarIcon,
   Clock,
-  Sparkles,
   Lock,
+  Eye,
+  RotateCcw,
 } from 'lucide-react';
 import { PaidLeaveManager } from './PaidLeaveManager';
 import { getDisplayUsername } from '../utils/authHelper';
@@ -21,10 +22,13 @@ interface CalendarViewProps {
   currentUser: User;
   events: ScheduleEvent[];
   balances: Record<string, PaidLeaveBalance>;
+  isMemberPerspective?: boolean;
+  onTogglePerspective?: () => void;
   onOpenNewEvent: (initialDate?: string) => void;
   onOpenNewLeave: (targetUserId?: string, targetUserName?: string, targetUserEmail?: string) => void;
   onOpenShare: () => void;
   onSelectEvent: (event: ScheduleEvent) => void;
+  onDeleteEvent?: (eventId: string) => Promise<void>;
   onUpdateGrant: (userId: string, granted: number, userEmail: string, userName: string) => Promise<void>;
 }
 
@@ -33,13 +37,26 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   currentUser,
   events,
   balances,
+  isMemberPerspective = false,
+  onTogglePerspective,
   onOpenNewEvent,
   onOpenNewLeave,
   onOpenShare,
   onSelectEvent,
+  onDeleteEvent,
   onUpdateGrant,
 }) => {
-  const isOwner = calendar.ownerId === currentUser.uid;
+  const currentUsername = getDisplayUsername(currentUser.email, currentUser.displayName);
+
+  // Real owner check
+  const isRealOwner = Boolean(
+    calendar.ownerId === currentUser.uid ||
+    (calendar.ownerEmail && currentUser.email && calendar.ownerEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+    (calendar.ownerUsername && currentUsername && calendar.ownerUsername.toLowerCase() === currentUsername.toLowerCase())
+  );
+
+  // Effective permissions: if member perspective is active, behave strictly as member
+  const effectiveIsOwner = Boolean(isRealOwner && !isMemberPerspective);
 
   // Tab view: 'month' | 'paid_leave' | 'members'
   const [currentTab, setCurrentTab] = useState<'month' | 'paid_leave' | 'members'>('month');
@@ -92,7 +109,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   // Current month days
   for (let day = 1; day <= daysInMonth; day++) {
     const curDate = new Date(year, month, day);
-    // Format YYYY-MM-DD cleanly using local date parts to prevent timezone drift
     const mStr = String(month + 1).padStart(2, '0');
     const dStr = String(day).padStart(2, '0');
     const dateStr = `${year}-${mStr}-${dStr}`;
@@ -149,40 +165,84 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      {/* Top Banner: Permissions Indicator */}
+      {/* Top Banner: Permissions & Perspective Mode Indicator */}
       <div
-        className={`p-3.5 rounded-2xl border text-xs flex items-center justify-between flex-wrap gap-2 ${
-          isOwner
+        className={`p-3.5 rounded-2xl border text-xs flex items-center justify-between flex-wrap gap-3 transition-all ${
+          isMemberPerspective
+            ? 'bg-blue-50/90 border-blue-200 text-blue-950 shadow-xs'
+            : isRealOwner
             ? 'bg-amber-50/80 border-amber-200 text-amber-950'
             : 'bg-indigo-50/80 border-indigo-200 text-indigo-950'
         }`}
       >
-        <div className="flex items-center gap-2">
-          {isOwner ? (
+        <div className="flex items-center gap-2.5 flex-1 min-w-[280px]">
+          {isRealOwner ? (
             <Shield className="w-4 h-4 text-amber-600 shrink-0" />
           ) : (
             <Lock className="w-4 h-4 text-indigo-600 shrink-0" />
           )}
-          <span>
-            {isOwner ? (
-              <span>
-                <strong>管理者権限（カレンダーオーナー）：</strong> 全員のスケジュールおよび有給休暇の登録・変更・削除が可能です。
-              </span>
+
+          <div className="leading-relaxed">
+            {isRealOwner ? (
+              isMemberPerspective ? (
+                <div>
+                  <span className="font-bold text-amber-900 bg-amber-100/80 px-2 py-0.5 rounded mr-1.5 border border-amber-300">
+                    管理者
+                  </span>
+                  <strong className="text-blue-900">【メンバー目線プレビュー中】:</strong>{' '}
+                  <span className="text-blue-800">
+                    メンバーと同じ視点で閲覧しています（自分の予定のみ変更・削除可能、他の人の予定は閲覧のみ）。
+                  </span>
+                </div>
+              ) : (
+                <div>
+                  <span className="font-bold text-amber-900 bg-amber-100/80 px-2 py-0.5 rounded mr-1.5 border border-amber-300">
+                    管理者
+                  </span>
+                  <strong>管理者モード:</strong> 全員のスケジュールおよび有給休暇の登録・変更・削除が可能です。
+                </div>
+              )
             ) : (
-              <span>
-                <strong>メンバー権限：</strong> 共有カレンダーです。自分のスケジュールのみ登録・変更・削除が可能です（他のメンバーの予定は閲覧のみ）。
-              </span>
+              <div>
+                <strong>メンバー権限:</strong> 共有カレンダーです。自分のスケジュールのみ登録・変更・削除が可能です（他のメンバーの予定は閲覧のみ）。
+              </div>
             )}
-          </span>
+          </div>
         </div>
 
-        <button
-          onClick={onOpenShare}
-          className="inline-flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-lg border border-slate-200 shadow-2xs transition"
-        >
-          <Users className="w-3.5 h-3.5 text-slate-500" />
-          <span>メンバー共有・確認 ({members.length}名)</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Admin Perspective Toggle Switch */}
+          {isRealOwner && onTogglePerspective && (
+            <button
+              onClick={onTogglePerspective}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer ${
+                isMemberPerspective
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                  : 'bg-white hover:bg-blue-50 text-blue-700 border border-blue-200'
+              }`}
+            >
+              {isMemberPerspective ? (
+                <>
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>管理者目線に戻す</span>
+                </>
+              ) : (
+                <>
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>メンバー目線で確認</span>
+                </>
+              )}
+            </button>
+          )}
+
+          <button
+            onClick={onOpenShare}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-xl border border-slate-200 shadow-2xs transition cursor-pointer text-xs"
+          >
+            <Users className="w-3.5 h-3.5 text-slate-500" />
+            <span>メンバー ({members.length}名)</span>
+          </button>
+        </div>
       </div>
 
       {/* Main Controls Bar */}
@@ -192,20 +252,20 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
             <button
               onClick={handlePrevMonth}
-              className="p-1.5 hover:bg-white text-slate-700 rounded-lg transition"
+              className="p-1.5 hover:bg-white text-slate-700 rounded-lg transition cursor-pointer"
               title="前月"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
             <button
               onClick={handleToday}
-              className="px-2.5 py-1 text-xs font-semibold hover:bg-white text-slate-700 rounded-lg transition"
+              className="px-2.5 py-1 text-xs font-semibold hover:bg-white text-slate-700 rounded-lg transition cursor-pointer"
             >
               今日
             </button>
             <button
               onClick={handleNextMonth}
-              className="p-1.5 hover:bg-white text-slate-700 rounded-lg transition"
+              className="p-1.5 hover:bg-white text-slate-700 rounded-lg transition cursor-pointer"
               title="翌月"
             >
               <ChevronRight className="w-4 h-4" />
@@ -221,7 +281,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
           <button
             onClick={() => setCurrentTab('month')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
               currentTab === 'month'
                 ? 'bg-white text-slate-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -232,7 +292,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </button>
           <button
             onClick={() => setCurrentTab('paid_leave')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
               currentTab === 'paid_leave'
                 ? 'bg-white text-emerald-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -243,7 +303,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </button>
           <button
             onClick={() => setCurrentTab('members')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
               currentTab === 'members'
                 ? 'bg-white text-slate-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -258,7 +318,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={() => onOpenNewLeave()}
-            className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-semibold rounded-xl transition"
+            className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-semibold rounded-xl transition cursor-pointer"
           >
             <Palmtree className="w-3.5 h-3.5" />
             <span>有給を登録</span>
@@ -266,7 +326,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
           <button
             onClick={() => onOpenNewEvent()}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-xs transition"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>予定を追加</span>
@@ -332,7 +392,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         onOpenNewEvent(calDay.dateStr);
                       }}
                       title="この日に予定を追加"
-                      className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
+                      className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
@@ -341,8 +401,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   {/* Events inside this cell */}
                   <div className="space-y-1 overflow-y-auto max-h-24 flex-1">
                     {dayEvents.map((ev) => {
-                      const isMyEvent = ev.targetUserId === currentUser.uid;
-
                       if (ev.isPaidLeave) {
                         return (
                           <div
@@ -399,9 +457,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           currentUser={currentUser}
           events={events}
           balances={balances}
+          isEffectiveAdmin={effectiveIsOwner}
           onUpdateGrant={onUpdateGrant}
           onOpenNewLeaveModal={onOpenNewLeave}
           onEditEvent={onSelectEvent}
+          onDeleteEvent={onDeleteEvent}
         />
       )}
 
@@ -423,10 +483,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               const memberEvents = events.filter(
                 (e) =>
                   e.targetUserId === member.id ||
-                  e.targetUserEmail?.toLowerCase() === member.email.toLowerCase()
+                  (e.targetUserName && e.targetUserName.toLowerCase() === member.name.toLowerCase()) ||
+                  (e.targetUserEmail && e.targetUserEmail.toLowerCase() === member.email.toLowerCase())
               );
               const isCurrent =
                 member.id === currentUser.uid ||
+                member.name.toLowerCase() === currentUsername.toLowerCase() ||
                 member.email.toLowerCase() === currentUser.email?.toLowerCase();
 
               return (
@@ -449,16 +511,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-slate-400">{member.email}</div>
+                        <div className="text-xs text-slate-400">@{member.name}</div>
                       </div>
                     </div>
 
-                    {(isOwner || isCurrent) && (
+                    {(effectiveIsOwner || isCurrent) && (
                       <button
-                        onClick={() =>
-                          onOpenNewEvent()
-                        }
-                        className="px-3 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition"
+                        onClick={() => onOpenNewEvent()}
+                        className="px-3 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition cursor-pointer"
                       >
                         + 予定を追加
                       </button>

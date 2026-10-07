@@ -55,6 +55,23 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+/**
+ * Strips all undefined properties from an object so Firestore operations never fail.
+ */
+export function cleanFirestoreData<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+        result[key] = cleanFirestoreData(value);
+      } else {
+        result[key] = value;
+      }
+    }
+  }
+  return result;
+}
+
 // Connection check as required by Firebase skill
 async function testConnection() {
   try {

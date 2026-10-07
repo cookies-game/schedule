@@ -22,6 +22,7 @@ export const ShareCalendarModal: React.FC<ShareCalendarModalProps> = ({
   onRemoveMemberUsername,
 }) => {
   const [newUsername, setNewUsername] = useState('');
+  const [removingUsername, setRemovingUsername] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -68,16 +69,16 @@ export const ShareCalendarModal: React.FC<ShareCalendarModalProps> = ({
   };
 
   const handleRemove = async (usernameToRemove: string) => {
-    if (!window.confirm(`「${usernameToRemove}」の共有を解除しますか？`)) return;
-
     setError(null);
     setSuccess(null);
     try {
       await onRemoveMemberUsername(usernameToRemove);
       setSuccess(`「${usernameToRemove}」の共有を解除しました。`);
+      setRemovingUsername(null);
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'メンバーの削除に失敗しました');
+      setRemovingUsername(null);
     }
   };
 
@@ -212,13 +213,30 @@ export const ShareCalendarModal: React.FC<ShareCalendarModalProps> = ({
                         メンバー
                       </span>
                       {isOwner && (
-                        <button
-                          onClick={() => handleRemove(uname)}
-                          title="共有を解除"
-                          className="p-1 text-slate-300 hover:text-rose-600 rounded transition cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        removingUsername === uname ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleRemove(uname)}
+                              className="px-1.5 py-0.5 text-[10px] font-bold text-white bg-rose-600 hover:bg-rose-700 rounded transition cursor-pointer"
+                            >
+                              解除
+                            </button>
+                            <button
+                              onClick={() => setRemovingUsername(null)}
+                              className="px-1 py-0.5 text-[10px] text-slate-500 hover:bg-slate-200 rounded transition cursor-pointer"
+                            >
+                              取消
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setRemovingUsername(uname)}
+                            title="共有を解除"
+                            className="p-1 text-slate-300 hover:text-rose-600 rounded transition cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )
                       )}
                     </div>
                   </div>

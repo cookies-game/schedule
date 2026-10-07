@@ -12,7 +12,6 @@ import {
   Search,
   Sparkles,
 } from 'lucide-react';
-
 import { getDisplayUsername } from '../utils/authHelper';
 
 interface CalendarListProps {
@@ -34,9 +33,14 @@ export const CalendarList: React.FC<CalendarListProps> = ({
 }) => {
   const [filter, setFilter] = useState<'all' | 'owned' | 'shared'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [deletingCalId, setDeletingCalId] = useState<string | null>(null);
+
+  const currentUsername = getDisplayUsername(user.email, user.displayName);
 
   const filteredCalendars = calendars.filter((cal) => {
-    const isOwner = cal.ownerId === user.uid;
+    const isOwner =
+      cal.ownerId === user.uid ||
+      (cal.ownerUsername && cal.ownerUsername.toLowerCase() === currentUsername.toLowerCase());
     const matchesFilter =
       filter === 'all' || (filter === 'owned' && isOwner) || (filter === 'shared' && !isOwner);
     const matchesSearch =
@@ -45,8 +49,12 @@ export const CalendarList: React.FC<CalendarListProps> = ({
     return matchesFilter && matchesSearch;
   });
 
-  const ownedCount = calendars.filter((c) => c.ownerId === user.uid).length;
-  const sharedCount = calendars.filter((c) => c.ownerId !== user.uid).length;
+  const ownedCount = calendars.filter(
+    (c) =>
+      c.ownerId === user.uid ||
+      (c.ownerUsername && c.ownerUsername.toLowerCase() === currentUsername.toLowerCase())
+  ).length;
+  const sharedCount = calendars.length - ownedCount;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -66,7 +74,7 @@ export const CalendarList: React.FC<CalendarListProps> = ({
 
           <button
             onClick={onOpenCreateModal}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-indigo-950 font-bold text-sm hover:bg-indigo-50 transition shadow-lg active:scale-95"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-indigo-950 font-bold text-sm hover:bg-indigo-50 transition shadow-lg active:scale-95 cursor-pointer"
           >
             <Plus className="w-4 h-4 text-indigo-600" />
             <span>新しいカレンダーを作成</span>
@@ -83,7 +91,7 @@ export const CalendarList: React.FC<CalendarListProps> = ({
         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit">
           <button
             onClick={() => setFilter('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
               filter === 'all'
                 ? 'bg-white text-slate-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -93,7 +101,7 @@ export const CalendarList: React.FC<CalendarListProps> = ({
           </button>
           <button
             onClick={() => setFilter('owned')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
               filter === 'owned'
                 ? 'bg-white text-slate-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -103,7 +111,7 @@ export const CalendarList: React.FC<CalendarListProps> = ({
           </button>
           <button
             onClick={() => setFilter('shared')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
               filter === 'shared'
                 ? 'bg-white text-slate-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -139,7 +147,7 @@ export const CalendarList: React.FC<CalendarListProps> = ({
           </p>
           <button
             onClick={onOpenCreateModal}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>カレンダーを作成する</span>
@@ -148,8 +156,15 @@ export const CalendarList: React.FC<CalendarListProps> = ({
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredCalendars.map((cal) => {
-            const isOwner = cal.ownerId === user.uid;
-            const memberCount = (cal.memberIds?.length || 0) + 1; // including owner
+            const isOwner =
+              cal.ownerId === user.uid ||
+              (cal.ownerUsername && cal.ownerUsername.toLowerCase() === currentUsername.toLowerCase());
+
+            const memberCount =
+              1 +
+              (cal.memberUsernames?.length || cal.memberEmails?.length || 0);
+
+            const isConfirming = deletingCalId === cal.id;
 
             return (
               <div
@@ -205,7 +220,7 @@ export const CalendarList: React.FC<CalendarListProps> = ({
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => onSelectCalendar(cal)}
-                      className="flex-1 py-2 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-xl transition text-center"
+                      className="flex-1 py-2 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-xl transition text-center cursor-pointer"
                     >
                       カレンダーを開く
                     </button>
@@ -213,19 +228,39 @@ export const CalendarList: React.FC<CalendarListProps> = ({
                     <button
                       onClick={() => onShareCalendar(cal)}
                       title="メンバー共有・確認"
-                      className="p-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition"
+                      className="p-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition cursor-pointer"
                     >
                       <Share2 className="w-4 h-4" />
                     </button>
 
                     {isOwner && (
-                      <button
-                        onClick={() => onDeleteCalendar(cal.id)}
-                        title="カレンダーを削除"
-                        className="p-2 border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-slate-400 rounded-xl transition"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      isConfirming ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              onDeleteCalendar(cal.id);
+                              setDeletingCalId(null);
+                            }}
+                            className="px-2 py-1 text-[10px] font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition cursor-pointer"
+                          >
+                            削除
+                          </button>
+                          <button
+                            onClick={() => setDeletingCalId(null)}
+                            className="px-1.5 py-1 text-[10px] text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setDeletingCalId(cal.id)}
+                          title="カレンダーを削除"
+                          className="p-2 border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-slate-400 rounded-xl transition cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )
                     )}
                   </div>
                 </div>

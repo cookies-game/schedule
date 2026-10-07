@@ -23,6 +23,7 @@ interface EventModalProps {
   initialDate?: string;
   calendar: CalendarType;
   currentUser: User;
+  isEffectiveAdmin?: boolean;
   onSave: (eventData: Omit<ScheduleEvent, 'id' | 'calendarId' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   onDelete?: (eventId: string) => Promise<void>;
 }
@@ -43,14 +44,33 @@ export const EventModal: React.FC<EventModalProps> = ({
   initialDate,
   calendar,
   currentUser,
+  isEffectiveAdmin,
   onSave,
   onDelete,
 }) => {
-  const isOwner = calendar.ownerId === currentUser.uid;
+  const currentUsername = getDisplayUsername(currentUser.email, currentUser.displayName);
 
-  // Check edit permission:
-  // Admin can edit all events. Non-admin can only edit if targetUserId === currentUser.uid
-  const canEdit = !event || isOwner || event.targetUserId === currentUser.uid;
+  // Check if current user is admin/owner of this calendar
+  const realIsOwner =
+    calendar.ownerId === currentUser.uid ||
+    (calendar.ownerEmail && currentUser.email && calendar.ownerEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+    (calendar.ownerUsername && currentUsername && calendar.ownerUsername.toLowerCase() === currentUsername.toLowerCase());
+
+  const isOwner = isEffectiveAdmin !== undefined ? isEffectiveAdmin : realIsOwner;
+
+  // Check if this event belongs to the current user
+  const isMyEvent = event
+    ? (
+        event.targetUserId === currentUser.uid ||
+        event.creatorId === currentUser.uid ||
+        (event.targetUserName && currentUsername && event.targetUserName.toLowerCase() === currentUsername.toLowerCase()) ||
+        (event.targetUserEmail && currentUser.email && event.targetUserEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+        (event.creatorEmail && currentUser.email && event.creatorEmail.toLowerCase() === currentUser.email.toLowerCase())
+      )
+    : true;
+
+  // Admin can edit/delete all events. Non-admin can ONLY edit/delete their own event.
+  const canEdit = !event || isOwner || isMyEvent;
 
   // Form states
   const [title, setTitle] = useState('');
@@ -64,14 +84,13 @@ export const EventModal: React.FC<EventModalProps> = ({
   const [paidLeaveDays, setPaidLeaveDays] = useState<number>(1);
   const [color, setColor] = useState(EVENT_COLORS[0]);
 
-  const currentUsername = getDisplayUsername(currentUser.email, currentUser.displayName);
-
   // Target member state (who is this event for)
   const [targetUserId, setTargetUserId] = useState<string>(currentUser.uid);
   const [targetUserName, setTargetUserName] = useState<string>(currentUsername);
   const [targetUserEmail, setTargetUserEmail] = useState<string>(currentUser.email || '');
 
   const [loading, setLoading] = useState(false);
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Build member choices: Owner + members
@@ -96,6 +115,7 @@ export const EventModal: React.FC<EventModalProps> = ({
   ];
 
   useEffect(() => {
+    setIsConfirmingDelete(false);
     if (event) {
       setTitle(event.title);
       setDescription(event.description || '');
@@ -148,7 +168,7 @@ export const EventModal: React.FC<EventModalProps> = ({
   };
 
   const handleMemberSelect = (val: string) => {
-    const selected = memberOptions.find((m) => m.id === val || m.email === val);
+    const selected = memberOptions.find((m) => m.id === val || m.name === val || m.email === val);
     if (selected) {
       setTargetUserId(selected.id);
       setTargetUserName(selected.name);
@@ -169,8 +189,8 @@ export const EventModal: React.FC<EventModalProps> = ({
         description: description.trim(),
         startDate,
         endDate: endDate >= startDate ? endDate : startDate,
-        startTime: isAllDay ? undefined : startTime,
-        endTime: isAllDay ? undefined : endTime,
+        startTime: isAllDay ? '' : (startTime || ''),
+        endTime: isAllDay ? '' : (endTime || ''),
         isAllDay,
         isPaidLeave,
         paidLeaveDays: isPaidLeave ? paidLeaveDays : 0,
@@ -191,9 +211,8 @@ export const EventModal: React.FC<EventModalProps> = ({
     }
   };
 
-  const handleDelete = async () => {
+  const handleExecuteDelete = async () => {
     if (!event || !onDelete || !canEdit) return;
-    if (!window.confirm('この予定を削除してもよろしいですか？')) return;
 
     setLoading(true);
     try {
@@ -202,6 +221,7 @@ export const EventModal: React.FC<EventModalProps> = ({
     } catch (err: any) {
       console.error(err);
       setError(err.message || '削除に失敗しました');
+      setIsConfirmingDelete(false);
     } finally {
       setLoading(false);
     }
@@ -228,7 +248,7 @@ export const EventModal: React.FC<EventModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition"
+            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -239,7 +259,7 @@ export const EventModal: React.FC<EventModalProps> = ({
           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs flex items-center gap-2 shrink-0">
             <Lock className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              <strong>閲覧のみ:</strong> この予定は「{event?.targetUserName}」さんのスケジュールです。管理者以外のメンバーは自分の予定のみ変更できます。
+              <strong>閲覧のみ:</strong> この予定は「{event?.targetUserName}」さんのスケジュールです。管理者以外のメンバーは自分の予定のみ変更・削除できます。
             </span>
           </div>
         )}
@@ -347,14 +367,14 @@ export const EventModal: React.FC<EventModalProps> = ({
               >
                 {memberOptions.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.name} ({m.email}) {m.isOwner ? '★管理者' : ''}
+                    {m.name} {m.isOwner ? '★管理者' : ''}
                   </option>
                 ))}
               </select>
             ) : (
               <div className="px-3 py-2 text-xs rounded-xl border border-slate-200 bg-slate-50 text-slate-700 font-medium flex items-center justify-between">
-                <span>{targetUserName} ({targetUserEmail})</span>
-                <span className="text-[10px] text-slate-400">固定</span>
+                <span>@{targetUserName}</span>
+                <span className="text-[10px] text-slate-400">あなた</span>
               </div>
             )}
           </div>
@@ -460,7 +480,7 @@ export const EventModal: React.FC<EventModalProps> = ({
                     key={c}
                     onClick={() => setColor(c)}
                     style={{ backgroundColor: c }}
-                    className="w-6 h-6 rounded-full flex items-center justify-center transition ring-2 ring-offset-1 ring-transparent"
+                    className="w-6 h-6 rounded-full flex items-center justify-center transition ring-2 ring-offset-1 ring-transparent cursor-pointer"
                   >
                     {color === c && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
                   </button>
@@ -472,15 +492,36 @@ export const EventModal: React.FC<EventModalProps> = ({
           {/* Footer Actions */}
           <div className="pt-3 border-t border-slate-100 flex items-center justify-between shrink-0">
             {event && canEdit ? (
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={loading}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>削除</span>
-              </button>
+              isConfirmingDelete ? (
+                <div className="flex items-center gap-2 bg-rose-50 p-1.5 px-2.5 rounded-xl border border-rose-200">
+                  <span className="text-[11px] text-rose-700 font-bold">削除しますか？</span>
+                  <button
+                    type="button"
+                    onClick={handleExecuteDelete}
+                    disabled={loading}
+                    className="px-2.5 py-1 text-[11px] font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-2xs transition cursor-pointer"
+                  >
+                    {loading ? '削除中...' : 'はい、削除'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsConfirmingDelete(false)}
+                    className="px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
+                  >
+                    キャンセル
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmingDelete(true)}
+                  disabled={loading}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>この予定を削除</span>
+                </button>
+              )
             ) : (
               <span />
             )}
@@ -489,15 +530,15 @@ export const EventModal: React.FC<EventModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
               >
-                {canEdit ? 'キャンセル' : '閉じる'}
+                {canEdit ? '閉じる' : '戻る'}
               </button>
               {canEdit && (
                 <button
                   type="submit"
                   disabled={loading || !title.trim()}
-                  className="px-5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition disabled:opacity-50"
+                  className="px-5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer"
                 >
                   {loading ? '保存中...' : event ? '更新する' : '登録する'}
                 </button>

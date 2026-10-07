@@ -18,7 +18,10 @@ service cloud.firestore {
     function isCalendarOwner(calendarId) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/calendars/$(calendarId)) &&
-        get(/databases/$(database)/documents/calendars/$(calendarId)).data.ownerId == request.auth.uid;
+        (
+          get(/databases/$(database)/documents/calendars/$(calendarId)).data.ownerId == request.auth.uid ||
+          (request.auth.token.email != null && get(/databases/$(database)/documents/calendars/$(calendarId)).data.ownerEmail == request.auth.token.email)
+        );
     }
 
     function isCalendarMember(calendarId) {
@@ -27,7 +30,10 @@ service cloud.firestore {
         (
           get(/databases/$(database)/documents/calendars/$(calendarId)).data.ownerId == request.auth.uid ||
           (request.auth.uid in get(/databases/$(database)/documents/calendars/$(calendarId)).data.memberIds) ||
-          (request.auth.token.email != null && get(/databases/$(database)/documents/calendars/$(calendarId)).data.memberEmails.hasAny([request.auth.token.email]))
+          (request.auth.token.email != null && (
+            get(/databases/$(database)/documents/calendars/$(calendarId)).data.ownerEmail == request.auth.token.email ||
+            get(/databases/$(database)/documents/calendars/$(calendarId)).data.memberEmails.hasAny([request.auth.token.email])
+          ))
         );
     }
 
@@ -42,7 +48,10 @@ service cloud.firestore {
       allow get: if isSignedIn() && (
         resource.data.ownerId == request.auth.uid ||
         (request.auth.uid in resource.data.memberIds) ||
-        (request.auth.token.email != null && resource.data.memberEmails.hasAny([request.auth.token.email]))
+        (request.auth.token.email != null && (
+          resource.data.ownerEmail == request.auth.token.email ||
+          resource.data.memberEmails.hasAny([request.auth.token.email])
+        ))
       );
 
       allow list: if isSignedIn();
@@ -56,6 +65,7 @@ service cloud.firestore {
       allow update: if isSignedIn() && (
         // Calendar creator/admin can update all fields
         resource.data.ownerId == request.auth.uid ||
+        (request.auth.token.email != null && resource.data.ownerEmail == request.auth.token.email) ||
         // Members or invited users can update member list when accepting invite
         (
           (request.auth.uid in resource.data.memberIds || (request.auth.token.email != null && resource.data.memberEmails.hasAny([request.auth.token.email]))) &&
@@ -63,7 +73,10 @@ service cloud.firestore {
         )
       );
 
-      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow delete: if isSignedIn() && (
+        resource.data.ownerId == request.auth.uid ||
+        (request.auth.token.email != null && resource.data.ownerEmail == request.auth.token.email)
+      );
 
       // Calendar members subcollection
       match /members/{memberId} {
@@ -78,19 +91,34 @@ service cloud.firestore {
         // Calendar creator (admin) can create for anyone. Non-admin can only create for themselves.
         allow create: if isCalendarMember(calendarId) && (
           isCalendarOwner(calendarId) ||
-          request.resource.data.targetUserId == request.auth.uid
+          request.resource.data.targetUserId == request.auth.uid ||
+          request.resource.data.creatorId == request.auth.uid ||
+          (request.auth.token.email != null && (
+            request.resource.data.targetUserEmail == request.auth.token.email ||
+            request.resource.data.creatorEmail == request.auth.token.email
+          ))
         );
 
         // Calendar creator (admin) can update/delete any event.
-        // Non-admin can ONLY update/delete their own event (targetUserId == request.auth.uid).
+        // Non-admin can ONLY update/delete their own event.
         allow update: if isCalendarMember(calendarId) && (
           isCalendarOwner(calendarId) ||
-          resource.data.targetUserId == request.auth.uid
+          resource.data.targetUserId == request.auth.uid ||
+          resource.data.creatorId == request.auth.uid ||
+          (request.auth.token.email != null && (
+            resource.data.targetUserEmail == request.auth.token.email ||
+            resource.data.creatorEmail == request.auth.token.email
+          ))
         );
 
         allow delete: if isCalendarMember(calendarId) && (
           isCalendarOwner(calendarId) ||
-          resource.data.targetUserId == request.auth.uid
+          resource.data.targetUserId == request.auth.uid ||
+          resource.data.creatorId == request.auth.uid ||
+          (request.auth.token.email != null && (
+            resource.data.targetUserEmail == request.auth.token.email ||
+            resource.data.creatorEmail == request.auth.token.email
+          ))
         );
       }
 

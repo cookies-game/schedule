@@ -8,7 +8,7 @@ import {
   onSnapshot,
   updateDoc,
 } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, handleFirestoreError, cleanFirestoreData, OperationType } from './firebase';
 import { Calendar as CalendarType, ScheduleEvent, PaidLeaveBalance } from './types';
 import { usernameToEmail, getDisplayUsername } from './utils/authHelper';
 import { Navbar } from './components/Navbar';
@@ -39,6 +39,9 @@ export const App: React.FC = () => {
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<ScheduleEvent | null>(null);
   const [initialEventDate, setInitialEventDate] = useState<string | undefined>(undefined);
+
+  // Perspective mode for admin (previewing as member)
+  const [isMemberPerspective, setIsMemberPerspective] = useState(false);
 
   // Current display username
   const currentUsername = currentUser
@@ -209,10 +212,10 @@ export const App: React.FC = () => {
     try {
       const memberEmails = data.memberUsernames.map(usernameToEmail);
 
-      const calData = {
+      const calData = cleanFirestoreData({
         id: newCalId,
         name: data.name,
-        description: data.description,
+        description: data.description || '',
         color: data.color,
         ownerId: currentUser.uid,
         ownerUsername: currentUsername,
@@ -223,7 +226,7 @@ export const App: React.FC = () => {
         memberEmails,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      };
+      });
 
       await setDoc(doc(db, 'calendars', newCalId), calData);
 
@@ -248,10 +251,6 @@ export const App: React.FC = () => {
 
   // Actions: Delete Calendar
   const handleDeleteCalendar = async (calId: string) => {
-    if (!window.confirm('このカレンダーを削除してもよろしいですか？すべての予定も削除されます。')) {
-      return;
-    }
-
     const calPath = `calendars/${calId}`;
     try {
       await deleteDoc(doc(db, 'calendars', calId));
@@ -318,10 +317,11 @@ export const App: React.FC = () => {
     if (selectedEvent) {
       const eventPath = `calendars/${currentCalendarId}/events/${selectedEvent.id}`;
       try {
-        await updateDoc(doc(db, 'calendars', currentCalendarId, 'events', selectedEvent.id), {
+        const payload = cleanFirestoreData({
           ...eventData,
           updatedAt: new Date().toISOString(),
         });
+        await updateDoc(doc(db, 'calendars', currentCalendarId, 'events', selectedEvent.id), payload);
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, eventPath);
       }
@@ -329,13 +329,14 @@ export const App: React.FC = () => {
       const eventId = `ev_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const eventPath = `calendars/${currentCalendarId}/events/${eventId}`;
       try {
-        await setDoc(doc(db, 'calendars', currentCalendarId, 'events', eventId), {
+        const payload = cleanFirestoreData({
           id: eventId,
           calendarId: currentCalendarId,
           ...eventData,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         });
+        await setDoc(doc(db, 'calendars', currentCalendarId, 'events', eventId), payload);
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, eventPath);
       }
@@ -364,15 +365,16 @@ export const App: React.FC = () => {
     const balancePath = `calendars/${currentCalendarId}/paidLeaveBalances/${targetUserId}`;
 
     try {
+      const balancePayload = cleanFirestoreData({
+        userId: targetUserId,
+        userEmail: userEmail || '',
+        userName: userName || '',
+        totalGranted: granted,
+        updatedAt: new Date().toISOString(),
+      });
       await setDoc(
         doc(db, 'calendars', currentCalendarId, 'paidLeaveBalances', targetUserId),
-        {
-          userId: targetUserId,
-          userEmail,
-          userName,
-          totalGranted: granted,
-          updatedAt: new Date().toISOString(),
-        },
+        balancePayload,
         { merge: true }
       );
     } catch (err) {
@@ -391,7 +393,10 @@ export const App: React.FC = () => {
           if (!currentUser) setIsAuthOpen(true);
           else setIsCreateCalendarOpen(true);
         }}
-        onBackToCalendarList={() => setCurrentCalendarId(null)}
+        onBackToCalendarList={() => {
+          setCurrentCalendarId(null);
+          setIsMemberPerspective(false);
+        }}
       />
 
       {/* Main Content Area */}
@@ -464,6 +469,8 @@ export const App: React.FC = () => {
             currentUser={currentUser}
             events={events}
             balances={balances}
+            isMemberPerspective={isMemberPerspective}
+            onTogglePerspective={() => setIsMemberPerspective(!isMemberPerspective)}
             onOpenNewEvent={(initialDate) => {
               setSelectedEvent(null);
               setInitialEventDate(initialDate);
@@ -479,6 +486,7 @@ export const App: React.FC = () => {
               setSelectedEvent(event);
               setIsEventModalOpen(true);
             }}
+            onDeleteEvent={handleDeleteEvent}
             onUpdateGrant={handleUpdateGrant}
           />
         ) : (
@@ -486,11 +494,15 @@ export const App: React.FC = () => {
           <CalendarList
             user={currentUser}
             calendars={calendars}
-            onSelectCalendar={(cal) => setCurrentCalendarId(cal.id)}
+            onSelectCalendar={(cal) => {
+              setCurrentCalendarId(cal.id);
+              setIsMemberPerspective(false);
+            }}
             onOpenCreateModal={() => setIsCreateCalendarOpen(true)}
             onDeleteCalendar={handleDeleteCalendar}
             onShareCalendar={(cal) => {
               setCurrentCalendarId(cal.id);
+              setIsMemberPerspective(false);
               setIsShareOpen(true);
             }}
           />
@@ -531,6 +543,18 @@ export const App: React.FC = () => {
                 initialDate={initialEventDate}
                 calendar={currentCalendar}
                 currentUser={currentUser}
+                isEffectiveAdmin={
+                  Boolean(
+                    (currentCalendar.ownerId === currentUser.uid ||
+                      (currentCalendar.ownerEmail &&
+                        currentUser.email &&
+                        currentCalendar.ownerEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+                      (currentCalendar.ownerUsername &&
+                        currentUsername &&
+                        currentCalendar.ownerUsername.toLowerCase() === currentUsername.toLowerCase())) &&
+                    !isMemberPerspective
+                  )
+                }
                 onSave={handleSaveEvent}
                 onDelete={handleDeleteEvent}
               />
