@@ -9,8 +9,8 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, cleanFirestoreData, OperationType } from './firebase';
-import { Calendar as CalendarType, ScheduleEvent, PaidLeaveBalance } from './types';
-import { usernameToEmail, getDisplayUsername } from './utils/authHelper';
+import { Calendar as CalendarType, ScheduleEvent, PaidLeaveBalance, Memo, UserProfile } from './types';
+import { usernameToEmail, getDisplayUsername, extractUsernameFromEmail } from './utils/authHelper';
 import { Navbar } from './components/Navbar';
 import { CalendarList } from './components/CalendarList';
 import { CalendarView } from './components/CalendarView';
@@ -18,10 +18,13 @@ import { AuthModal } from './components/AuthModal';
 import { CreateCalendarModal } from './components/CreateCalendarModal';
 import { ShareCalendarModal } from './components/ShareCalendarModal';
 import { EventModal } from './components/EventModal';
-import { Calendar as CalendarIcon, Sparkles, LogIn, Palmtree, User as UserIcon } from 'lucide-react';
+import { MemoModal } from './components/MemoModal';
+import { AccountSettingsModal } from './components/AccountSettingsModal';
+import { Calendar as CalendarIcon, Sparkles, LogIn, Palmtree, User as UserIcon, FileText } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
   // Calendars state
@@ -32,20 +35,30 @@ export const App: React.FC = () => {
   const [events, setEvents] = useState<ScheduleEvent[]>([]);
   const [balances, setBalances] = useState<Record<string, PaidLeaveBalance>>({});
 
+  // Memos state (global across calendars & shared with accounts)
+  const [memos, setMemos] = useState<Memo[]>([]);
+
   // Modals state
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCreateCalendarOpen, setIsCreateCalendarOpen] = useState(false);
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<ScheduleEvent | null>(null);
   const [initialEventDate, setInitialEventDate] = useState<string | undefined>(undefined);
 
+  // Memo Modal state
+  const [isMemoModalOpen, setIsMemoModalOpen] = useState(false);
+  const [selectedMemo, setSelectedMemo] = useState<Memo | null>(null);
+  const [initialMemoDate, setInitialMemoDate] = useState<string | undefined>(undefined);
+
   // Perspective mode for admin (previewing as member)
   const [isMemberPerspective, setIsMemberPerspective] = useState(false);
 
   // Current display username
   const currentUsername = currentUser
-    ? getDisplayUsername(currentUser.email, currentUser.displayName)
+    ? extractUsernameFromEmail(currentUser.email) ||
+      getDisplayUsername(currentUser.email, currentUser.displayName)
     : '';
 
   // 1. Listen for auth state
@@ -58,10 +71,27 @@ export const App: React.FC = () => {
         setCurrentCalendarId(null);
         setEvents([]);
         setBalances({});
+        setMemos([]);
+        setUserProfile(null);
       }
     });
     return () => unsubscribe();
   }, []);
+
+  // Listen to user profile document in Firestore (for photoURL, username, displayName)
+  useEffect(() => {
+    if (!currentUser) {
+      setUserProfile(null);
+      return;
+    }
+    const userDocRef = doc(db, 'users', currentUser.uid);
+    const unsubscribe = onSnapshot(userDocRef, (snap) => {
+      if (snap.exists()) {
+        setUserProfile(snap.data() as UserProfile);
+      }
+    });
+    return () => unsubscribe();
+  }, [currentUser]);
 
   // 2. Listen for calendars belonging to or shared with current user
   useEffect(() => {
@@ -72,7 +102,7 @@ export const App: React.FC = () => {
       calendarsRef,
       (snapshot) => {
         const userEmail = currentUser.email?.toLowerCase();
-        const uname = getDisplayUsername(currentUser.email, currentUser.displayName).toLowerCase();
+        const uname = (extractUsernameFromEmail(currentUser.email) || getDisplayUsername(currentUser.email, currentUser.displayName)).toLowerCase();
         const calList: CalendarType[] = [];
 
         snapshot.forEach((docSnap) => {
@@ -196,6 +226,77 @@ export const App: React.FC = () => {
       unsubBalances();
     };
   }, [currentCalendarId, currentUser]);
+
+  // 4. Listen for Memos (top-level collection `memos`)
+  useEffect(() => {
+    if (!currentUser) {
+      setMemos([]);
+      return;
+    }
+
+    const memosRef = collection(db, 'memos');
+    const unsubscribe = onSnapshot(
+      memosRef,
+      (snapshot) => {
+        const uEmail = currentUser.email?.toLowerCase();
+        const uname = (extractUsernameFromEmail(currentUser.email) || getDisplayUsername(currentUser.email, currentUser.displayName)).toLowerCase();
+        const mList: Memo[] = [];
+
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          const isCreator = data.creatorId === currentUser.uid;
+          const isCreatorEmail = uEmail && data.creatorEmail && data.creatorEmail.toLowerCase() === uEmail;
+          const isCreatorUsername = uname && data.creatorUsername && data.creatorUsername.toLowerCase() === uname;
+          const isSharedUsername =
+            Array.isArray(data.sharedWithUsernames) &&
+            data.sharedWithUsernames.map((u: string) => u.toLowerCase()).includes(uname);
+          const isSharedEmail =
+            uEmail &&
+            Array.isArray(data.sharedWithEmails) &&
+            data.sharedWithEmails.map((e: string) => e.toLowerCase()).includes(uEmail);
+          const isMemberOfLinkedCal =
+            data.linkedCalendarId &&
+            calendars.some((c) => c.id === data.linkedCalendarId);
+
+          if (isCreator || isCreatorEmail || isCreatorUsername || isSharedUsername || isSharedEmail || isMemberOfLinkedCal) {
+            mList.push({
+              id: docSnap.id,
+              calendarId: data.calendarId || data.linkedCalendarId || '',
+              linkedCalendarId: data.linkedCalendarId || data.calendarId || '',
+              linkedCalendarName: data.linkedCalendarName || '',
+              title: data.title || '',
+              content: data.content || '',
+              category: data.category || 'メモ',
+              linkedDate: data.linkedDate || '',
+              linkedEventId: data.linkedEventId,
+              color: data.color || '#ffffff',
+              isPinned: Boolean(data.isPinned),
+              creatorId: data.creatorId || '',
+              creatorUsername: data.creatorUsername || '',
+              creatorName: data.creatorName || '',
+              creatorEmail: data.creatorEmail || '',
+              sharedWithUsernames: data.sharedWithUsernames || [],
+              sharedWithEmails: data.sharedWithEmails || [],
+              createdAt: data.createdAt || '',
+              updatedAt: data.updatedAt || '',
+            });
+          }
+        });
+
+        mList.sort((a, b) => {
+          if (a.isPinned && !b.isPinned) return -1;
+          if (!a.isPinned && b.isPinned) return 1;
+          return b.createdAt.localeCompare(a.createdAt);
+        });
+        setMemos(mList);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'memos');
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentUser, calendars]);
 
   // Actions: Create Calendar
   const handleCreateCalendar = async (data: {
@@ -365,10 +466,14 @@ export const App: React.FC = () => {
     const balancePath = `calendars/${currentCalendarId}/paidLeaveBalances/${targetUserId}`;
 
     try {
+      const normalizedEmail = userEmail?.includes('@')
+        ? userEmail
+        : usernameToEmail(userName || targetUserId);
+
       const balancePayload = cleanFirestoreData({
         userId: targetUserId,
-        userEmail: userEmail || '',
-        userName: userName || '',
+        userEmail: normalizedEmail,
+        userName: userName || targetUserId,
         totalGranted: granted,
         updatedAt: new Date().toISOString(),
       });
@@ -377,8 +482,66 @@ export const App: React.FC = () => {
         balancePayload,
         { merge: true }
       );
+      if (userName && userName !== targetUserId) {
+        await setDoc(
+          doc(db, 'calendars', currentCalendarId, 'paidLeaveBalances', userName),
+          balancePayload,
+          { merge: true }
+        );
+      }
+      if (normalizedEmail && normalizedEmail !== targetUserId) {
+        await setDoc(
+          doc(db, 'calendars', currentCalendarId, 'paidLeaveBalances', normalizedEmail),
+          balancePayload,
+          { merge: true }
+        );
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, balancePath);
+    }
+  };
+
+  // Actions: Save Memo (Create or Update)
+  const handleSaveMemo = async (
+    memoData: Omit<Memo, 'id' | 'createdAt' | 'updatedAt'>
+  ) => {
+    if (!currentUser) return;
+
+    if (selectedMemo) {
+      const memoPath = `memos/${selectedMemo.id}`;
+      try {
+        const payload = cleanFirestoreData({
+          ...memoData,
+          updatedAt: new Date().toISOString(),
+        });
+        await updateDoc(doc(db, 'memos', selectedMemo.id), payload);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, memoPath);
+      }
+    } else {
+      const memoId = `memo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const memoPath = `memos/${memoId}`;
+      try {
+        const payload = cleanFirestoreData({
+          id: memoId,
+          ...memoData,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        await setDoc(doc(db, 'memos', memoId), payload);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, memoPath);
+      }
+    }
+  };
+
+  // Actions: Delete Memo
+  const handleDeleteMemo = async (memoId: string) => {
+    const memoPath = `memos/${memoId}`;
+    try {
+      await deleteDoc(doc(db, 'memos', memoId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, memoPath);
     }
   };
 
@@ -387,11 +550,24 @@ export const App: React.FC = () => {
       {/* Navigation Bar */}
       <Navbar
         user={currentUser}
+        userProfile={userProfile}
         currentCalendar={currentCalendar}
         onOpenAuth={() => setIsAuthOpen(true)}
         onOpenCreateCalendar={() => {
           if (!currentUser) setIsAuthOpen(true);
           else setIsCreateCalendarOpen(true);
+        }}
+        onOpenCreateMemo={() => {
+          if (!currentUser) setIsAuthOpen(true);
+          else {
+            setSelectedMemo(null);
+            setInitialMemoDate(undefined);
+            setIsMemoModalOpen(true);
+          }
+        }}
+        onOpenSettings={() => {
+          if (!currentUser) setIsAuthOpen(true);
+          else setIsSettingsOpen(true);
         }}
         onBackToCalendarList={() => {
           setCurrentCalendarId(null);
@@ -413,11 +589,11 @@ export const App: React.FC = () => {
             </div>
 
             <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight mb-4">
-              チームスケジュール & 有給休暇管理
+              チームスケジュール・共有メモ & 有給休暇管理
             </h1>
 
             <p className="text-base text-slate-600 max-w-xl mx-auto mb-8 leading-relaxed">
-              ユーザーネームとパスワードで簡単ログイン。Googleスライドのように1つのアカウントで複数のカレンダーを作成・共有でき、有給休暇の残数や取得予定もリアルタイムに管理できます。
+              ユーザーネームとパスワードで簡単ログイン。Googleスライドのように1つのアカウントで複数のカレンダーや共有メモを作成・管理でき、有給休暇の残数や取得予定もリアルタイムに管理できます。
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-16">
@@ -437,7 +613,7 @@ export const App: React.FC = () => {
                 </div>
                 <h2 className="text-sm font-bold text-slate-800 mb-2">ユーザーネーム認証</h2>
                 <p className="text-xs text-slate-500 leading-relaxed">
-                  メールアドレス不要！お好きなユーザーネームとパスワードだけで登録＆ログイン可能です。
+                  メールアドレス不要！お好きなユーザーネームとパスワードだけで登録＆ログイン可能です。プロフィール設定から変更もできます。
                 </p>
               </div>
 
@@ -447,17 +623,17 @@ export const App: React.FC = () => {
                 </div>
                 <h2 className="text-sm font-bold text-slate-800 mb-2">有給休暇 & 残数追跡</h2>
                 <p className="text-xs text-slate-500 leading-relaxed">
-                  誰が何月何日に有給を取るかを一目で把握。残り有給日数や取得状況も自動集計。
+                  誰が何月何日に有給を取るかを一目で把握。残り有給日数や取得状況も自動集計されます。
                 </p>
               </div>
 
               <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs">
-                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center mb-4">
-                  <CalendarIcon className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center mb-4">
+                  <FileText className="w-5 h-5" />
                 </div>
-                <h2 className="text-sm font-bold text-slate-800 mb-2">管理者権限 & 共有</h2>
+                <h2 className="text-sm font-bold text-slate-800 mb-2">連携メモ & 共有ノート</h2>
                 <p className="text-xs text-slate-500 leading-relaxed">
-                  作成者が管理者となり全員の予定を編集可能。メンバーは自分の予定のみ安全に編集できます。
+                  カレンダーの日付やプロジェクトと連携したメモを作成し、チームメンバー間で共有できます。
                 </p>
               </div>
             </div>
@@ -469,6 +645,7 @@ export const App: React.FC = () => {
             currentUser={currentUser}
             events={events}
             balances={balances}
+            memos={memos}
             isMemberPerspective={isMemberPerspective}
             onTogglePerspective={() => setIsMemberPerspective(!isMemberPerspective)}
             onOpenNewEvent={(initialDate) => {
@@ -481,6 +658,16 @@ export const App: React.FC = () => {
               setInitialEventDate(new Date().toISOString().split('T')[0]);
               setIsEventModalOpen(true);
             }}
+            onOpenNewMemo={(initialDate) => {
+              setSelectedMemo(null);
+              setInitialMemoDate(initialDate);
+              setIsMemoModalOpen(true);
+            }}
+            onEditMemo={(memo) => {
+              setSelectedMemo(memo);
+              setIsMemoModalOpen(true);
+            }}
+            onDeleteMemo={handleDeleteMemo}
             onOpenShare={() => setIsShareOpen(true)}
             onSelectEvent={(event) => {
               setSelectedEvent(event);
@@ -494,6 +681,7 @@ export const App: React.FC = () => {
           <CalendarList
             user={currentUser}
             calendars={calendars}
+            memos={memos}
             onSelectCalendar={(cal) => {
               setCurrentCalendarId(cal.id);
               setIsMemberPerspective(false);
@@ -505,6 +693,16 @@ export const App: React.FC = () => {
               setIsMemberPerspective(false);
               setIsShareOpen(true);
             }}
+            onOpenCreateMemo={() => {
+              setSelectedMemo(null);
+              setInitialMemoDate(undefined);
+              setIsMemoModalOpen(true);
+            }}
+            onEditMemo={(memo) => {
+              setSelectedMemo(memo);
+              setIsMemoModalOpen(true);
+            }}
+            onDeleteMemo={handleDeleteMemo}
           />
         )}
       </main>
@@ -514,11 +712,39 @@ export const App: React.FC = () => {
 
       {currentUser && (
         <>
+          <AccountSettingsModal
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            currentUser={currentUser}
+            onProfileUpdated={() => {
+              // Trigger refresh of user if needed
+            }}
+            onAccountDeleted={() => {
+              setIsSettingsOpen(false);
+            }}
+          />
+
           <CreateCalendarModal
             isOpen={isCreateCalendarOpen}
             onClose={() => setIsCreateCalendarOpen(false)}
             onSubmit={handleCreateCalendar}
             user={currentUser}
+          />
+
+          <MemoModal
+            isOpen={isMemoModalOpen}
+            onClose={() => {
+              setIsMemoModalOpen(false);
+              setSelectedMemo(null);
+              setInitialMemoDate(undefined);
+            }}
+            memo={selectedMemo}
+            initialDate={initialMemoDate}
+            calendar={currentCalendar}
+            calendars={calendars}
+            currentUser={currentUser}
+            onSave={handleSaveMemo}
+            onDelete={handleDeleteMemo}
           />
 
           {currentCalendar && (

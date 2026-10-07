@@ -22,7 +22,14 @@ export function getDisplayUsername(email?: string | null, displayName?: string |
   if (displayName && displayName.trim().length > 0) {
     return displayName.trim();
   }
-  if (!email) return 'ゲスト';
+  return extractUsernameFromEmail(email) || 'ゲスト';
+}
+
+/**
+ * Specifically extracts login username from email without relying on displayName
+ */
+export function extractUsernameFromEmail(email?: string | null): string {
+  if (!email) return '';
   if (email.endsWith('@schedule.internal')) {
     const local = email.replace('@schedule.internal', '');
     if (local.startsWith('u_')) {
@@ -37,4 +44,25 @@ export function getDisplayUsername(email?: string | null, displayName?: string |
     return local;
   }
   return email.split('@')[0];
+}
+
+/**
+ * Returns all potential identifiers for a user to ensure flawless balance and event lookup
+ */
+export function getUserIdentifiers(
+  uid?: string | null,
+  email?: string | null,
+  displayName?: string | null,
+  explicitUsername?: string | null
+): string[] {
+  const ids: string[] = [];
+  if (uid) ids.push(uid.trim().toLowerCase());
+  if (explicitUsername) ids.push(explicitUsername.trim().toLowerCase());
+  if (displayName) ids.push(displayName.trim().toLowerCase());
+  if (email) {
+    ids.push(email.trim().toLowerCase());
+    const uname = extractUsernameFromEmail(email);
+    if (uname) ids.push(uname.toLowerCase());
+  }
+  return Array.from(new Set(ids.filter(Boolean)));
 }

@@ -65,3 +65,25 @@ export interface PaidLeaveBalance {
   notes?: string;
   updatedAt: string;
 }
+
+export interface Memo {
+  id: string;
+  calendarId?: string; // Optional if not linked to a specific calendar
+  linkedCalendarId?: string;
+  linkedCalendarName?: string;
+  title: string;
+  content: string;
+  category?: string;
+  linkedDate?: string; // YYYY-MM-DD
+  linkedEventId?: string;
+  color?: string;
+  isPinned?: boolean;
+  creatorId: string;
+  creatorUsername: string;
+  creatorName: string;
+  creatorEmail?: string;
+  sharedWithUsernames?: string[]; // Shared with these specific usernames
+  sharedWithEmails?: string[];
+  createdAt: string;
+  updatedAt: string;
+}

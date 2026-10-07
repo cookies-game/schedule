@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import { Calendar as CalendarType } from '../types';
+import { Calendar as CalendarType, Memo } from '../types';
 import {
   Calendar as CalendarIcon,
   Plus,
@@ -11,31 +11,44 @@ import {
   Clock,
   Search,
   Sparkles,
+  FileText,
 } from 'lucide-react';
-import { getDisplayUsername } from '../utils/authHelper';
+import { getDisplayUsername, extractUsernameFromEmail } from '../utils/authHelper';
+import { MemoList } from './MemoList';
 
 interface CalendarListProps {
   user: User;
   calendars: CalendarType[];
+  memos: Memo[];
   onSelectCalendar: (calendar: CalendarType) => void;
   onOpenCreateModal: () => void;
   onDeleteCalendar: (calendarId: string) => void;
   onShareCalendar: (calendar: CalendarType) => void;
+  onOpenCreateMemo: () => void;
+  onEditMemo: (memo: Memo) => void;
+  onDeleteMemo: (memoId: string) => Promise<void>;
 }
 
 export const CalendarList: React.FC<CalendarListProps> = ({
   user,
   calendars,
+  memos,
   onSelectCalendar,
   onOpenCreateModal,
   onDeleteCalendar,
   onShareCalendar,
+  onOpenCreateMemo,
+  onEditMemo,
+  onDeleteMemo,
 }) => {
+  const [mainTab, setMainTab] = useState<'calendars' | 'memos'>('calendars');
   const [filter, setFilter] = useState<'all' | 'owned' | 'shared'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [deletingCalId, setDeletingCalId] = useState<string | null>(null);
 
-  const currentUsername = getDisplayUsername(user.email, user.displayName);
+  const currentUsername =
+    extractUsernameFromEmail(user.email) ||
+    getDisplayUsername(user.email, user.displayName);
 
   const filteredCalendars = calendars.filter((cal) => {
     const isOwner =
@@ -63,22 +76,32 @@ export const CalendarList: React.FC<CalendarListProps> = ({
         <div className="relative z-10 max-w-2xl">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/30 text-indigo-200 text-xs font-semibold backdrop-blur-xs mb-3">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>マルチカレンダー & 有給管理システム</span>
+            <span>マルチカレンダー & 共有メモ & 有給管理システム</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight mb-2">
-            スケジュール & 有給休暇カレンダー
+            スケジュール・共有メモ & 有給管理
           </h1>
           <p className="text-indigo-200 text-sm leading-relaxed mb-6">
-            Googleスライドのように複数のカレンダーを作成して使い分けたり、チームメンバーと共有してスケジュールや有給取得をリアルタイムに管理できます。
+            1つのアカウントで複数のカレンダーや連携メモを作成し、チームメンバーとリアルタイム共有。有給休暇の残数や取得予定も一目で把握できます。
           </p>
 
-          <button
-            onClick={onOpenCreateModal}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-indigo-950 font-bold text-sm hover:bg-indigo-50 transition shadow-lg active:scale-95 cursor-pointer"
-          >
-            <Plus className="w-4 h-4 text-indigo-600" />
-            <span>新しいカレンダーを作成</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={onOpenCreateModal}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-indigo-950 font-bold text-sm hover:bg-indigo-50 transition shadow-lg active:scale-95 cursor-pointer"
+            >
+              <Plus className="w-4 h-4 text-indigo-600" />
+              <span>新しいカレンダーを作成</span>
+            </button>
+
+            <button
+              onClick={onOpenCreateMemo}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-700/80 hover:bg-indigo-700 text-white font-bold text-sm border border-indigo-400/40 transition shadow-sm active:scale-95 cursor-pointer"
+            >
+              <FileText className="w-4 h-4 text-indigo-300" />
+              <span>新しいメモを作成</span>
+            </button>
+          </div>
         </div>
 
         <div className="absolute right-0 bottom-0 opacity-10 pointer-events-none translate-x-12 translate-y-8">
@@ -86,188 +109,231 @@ export const CalendarList: React.FC<CalendarListProps> = ({
         </div>
       </div>
 
-      {/* Filter bar & search */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 mb-6">
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit">
+      {/* Main Tab Navigation (Calendars vs Memos) */}
+      <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-6">
+        <div className="flex items-center gap-2 bg-slate-200/70 p-1 rounded-2xl">
           <button
-            onClick={() => setFilter('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-              filter === 'all'
-                ? 'bg-white text-slate-800 shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
+            onClick={() => setMainTab('calendars')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition flex items-center gap-2 cursor-pointer ${
+              mainTab === 'calendars'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            すべて ({calendars.length})
+            <CalendarIcon className="w-4 h-4 text-indigo-600" />
+            <span>カレンダー ({calendars.length})</span>
           </button>
-          <button
-            onClick={() => setFilter('owned')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-              filter === 'owned'
-                ? 'bg-white text-slate-800 shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            自分が作成・管理者 ({ownedCount})
-          </button>
-          <button
-            onClick={() => setFilter('shared')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-              filter === 'shared'
-                ? 'bg-white text-slate-800 shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            共有されたカレンダー ({sharedCount})
-          </button>
-        </div>
 
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="カレンダーを検索..."
-            className="w-full sm:w-64 pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-          />
+          <button
+            onClick={() => setMainTab('memos')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition flex items-center gap-2 cursor-pointer ${
+              mainTab === 'memos'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <FileText className="w-4 h-4 text-indigo-600" />
+            <span>共有メモ & ノート ({memos.length})</span>
+          </button>
         </div>
       </div>
 
-      {/* Calendar Grid */}
-      {filteredCalendars.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-3xl border border-dashed border-slate-200 p-8">
-          <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-4">
-            <CalendarIcon className="w-8 h-8" />
-          </div>
-          <h3 className="text-base font-bold text-slate-800 mb-1">カレンダーが見つかりません</h3>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto mb-6">
-            {searchQuery
-              ? '検索条件に一致するカレンダーがありません。'
-              : '「新しいカレンダーを作成」ボタンから新しいカレンダーを作成してみましょう！'}
-          </p>
-          <button
-            onClick={onOpenCreateModal}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>カレンダーを作成する</span>
-          </button>
-        </div>
+      {/* Tab Content */}
+      {mainTab === 'memos' ? (
+        <MemoList
+          user={user}
+          memos={memos}
+          calendars={calendars}
+          onOpenCreateMemo={() => onOpenCreateMemo()}
+          onEditMemo={onEditMemo}
+          onDeleteMemo={onDeleteMemo}
+          onSelectCalendar={(calId) => {
+            const found = calendars.find((c) => c.id === calId);
+            if (found) onSelectCalendar(found);
+          }}
+        />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredCalendars.map((cal) => {
-            const isOwner =
-              cal.ownerId === user.uid ||
-              (cal.ownerUsername && cal.ownerUsername.toLowerCase() === currentUsername.toLowerCase());
-
-            const memberCount =
-              1 +
-              (cal.memberUsernames?.length || cal.memberEmails?.length || 0);
-
-            const isConfirming = deletingCalId === cal.id;
-
-            return (
-              <div
-                key={cal.id}
-                className="group relative bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs hover:shadow-md hover:border-slate-300 transition flex flex-col justify-between"
+        <>
+          {/* Filter bar & search */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 mb-6">
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit">
+              <button
+                onClick={() => setFilter('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                  filter === 'all'
+                    ? 'bg-white text-slate-800 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
               >
-                <div>
-                  <div className="flex items-start justify-between gap-3 mb-3">
-                    <div className="flex items-center gap-2.5">
-                      <div
-                        className="w-4 h-4 rounded-full shrink-0 ring-4 ring-slate-100"
-                        style={{ backgroundColor: cal.color || '#4f46e5' }}
-                      />
-                      <h2
-                        onClick={() => onSelectCalendar(cal)}
-                        className="font-bold text-slate-800 text-base group-hover:text-indigo-600 transition cursor-pointer truncate max-w-[200px]"
-                      >
-                        {cal.name}
-                      </h2>
-                    </div>
+                すべて ({calendars.length})
+              </button>
+              <button
+                onClick={() => setFilter('owned')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                  filter === 'owned'
+                    ? 'bg-white text-slate-800 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                自分が作成・管理者 ({ownedCount})
+              </button>
+              <button
+                onClick={() => setFilter('shared')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                  filter === 'shared'
+                    ? 'bg-white text-slate-800 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                共有されたカレンダー ({sharedCount})
+              </button>
+            </div>
 
-                    {isOwner ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 shrink-0">
-                        <Shield className="w-3 h-3" />
-                        管理者
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 shrink-0">
-                        メンバー
-                      </span>
-                    )}
-                  </div>
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="カレンダーを検索..."
+                className="w-full sm:w-64 pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              />
+            </div>
+          </div>
 
-                  <p className="text-xs text-slate-500 line-clamp-2 min-h-[32px] mb-4">
-                    {cal.description || '説明なし'}
-                  </p>
-                </div>
-
-                <div className="pt-4 border-t border-slate-100">
-                  <div className="flex items-center justify-between text-xs text-slate-400 mb-4">
-                    <div className="flex items-center gap-1.5">
-                      <Users className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{memberCount} 人参加</span>
-                    </div>
-                    <div className="flex items-center gap-1 text-[11px]">
-                      <Clock className="w-3 h-3" />
-                      <span>
-                        作成者: {isOwner ? 'あなた' : cal.ownerUsername || cal.ownerName || getDisplayUsername(cal.ownerEmail, null)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => onSelectCalendar(cal)}
-                      className="flex-1 py-2 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-xl transition text-center cursor-pointer"
-                    >
-                      カレンダーを開く
-                    </button>
-
-                    <button
-                      onClick={() => onShareCalendar(cal)}
-                      title="メンバー共有・確認"
-                      className="p-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition cursor-pointer"
-                    >
-                      <Share2 className="w-4 h-4" />
-                    </button>
-
-                    {isOwner && (
-                      isConfirming ? (
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => {
-                              onDeleteCalendar(cal.id);
-                              setDeletingCalId(null);
-                            }}
-                            className="px-2 py-1 text-[10px] font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition cursor-pointer"
-                          >
-                            削除
-                          </button>
-                          <button
-                            onClick={() => setDeletingCalId(null)}
-                            className="px-1.5 py-1 text-[10px] text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
-                          >
-                            取消
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setDeletingCalId(cal.id)}
-                          title="カレンダーを削除"
-                          className="p-2 border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-slate-400 rounded-xl transition cursor-pointer"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )
-                    )}
-                  </div>
-                </div>
+          {/* Calendar Grid */}
+          {filteredCalendars.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-3xl border border-dashed border-slate-200 p-8">
+              <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-4">
+                <CalendarIcon className="w-8 h-8" />
               </div>
-            );
-          })}
-        </div>
+              <h3 className="text-base font-bold text-slate-800 mb-1">カレンダーが見つかりません</h3>
+              <p className="text-xs text-slate-500 mb-6 max-w-sm mx-auto">
+                {searchQuery || filter !== 'all'
+                  ? '検索条件に一致するカレンダーがありません。条件を変更してください。'
+                  : 'まだカレンダーがありません。新しいカレンダーを作成してスケジュールと有給管理を始めましょう。'}
+              </p>
+              <button
+                onClick={onOpenCreateModal}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-xs shadow-md shadow-indigo-100 hover:bg-indigo-700 transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>新しいカレンダーを作成</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredCalendars.map((cal) => {
+                const isOwner =
+                  cal.ownerId === user.uid ||
+                  (cal.ownerUsername && cal.ownerUsername.toLowerCase() === currentUsername.toLowerCase());
+                const memberCount = (cal.memberUsernames?.length || cal.memberEmails?.length || 0) + 1;
+                const isConfirming = deletingCalId === cal.id;
+
+                return (
+                  <div
+                    key={cal.id}
+                    className="bg-white rounded-2xl border border-slate-200/90 shadow-xs hover:shadow-md transition-all p-5 flex flex-col justify-between group"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            style={{ backgroundColor: cal.color || '#4f46e5' }}
+                            className="w-3.5 h-3.5 rounded-full shrink-0 shadow-2xs"
+                          />
+                          <h2
+                            onClick={() => onSelectCalendar(cal)}
+                            className="font-bold text-slate-900 group-hover:text-indigo-600 transition cursor-pointer text-base line-clamp-1"
+                          >
+                            {cal.name}
+                          </h2>
+                        </div>
+
+                        {isOwner ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 shrink-0">
+                            <Shield className="w-2.5 h-2.5" />
+                            管理者
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 shrink-0">
+                            メンバー
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-500 line-clamp-2 min-h-[32px] mb-4">
+                        {cal.description || '説明なし'}
+                      </p>
+                    </div>
+
+                    <div className="pt-4 border-t border-slate-100">
+                      <div className="flex items-center justify-between text-xs text-slate-400 mb-4">
+                        <div className="flex items-center gap-1.5">
+                          <Users className="w-3.5 h-3.5 text-slate-400" />
+                          <span>{memberCount} 人参加</span>
+                        </div>
+                        <div className="flex items-center gap-1 text-[11px]">
+                          <Clock className="w-3 h-3" />
+                          <span>
+                            作成者: {isOwner ? 'あなた' : cal.ownerUsername || cal.ownerName || getDisplayUsername(cal.ownerEmail, null)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => onSelectCalendar(cal)}
+                          className="flex-1 py-2 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-xl transition text-center cursor-pointer"
+                        >
+                          カレンダーを開く
+                        </button>
+
+                        <button
+                          onClick={() => onShareCalendar(cal)}
+                          title="メンバー共有・確認"
+                          className="p-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition cursor-pointer"
+                        >
+                          <Share2 className="w-4 h-4" />
+                        </button>
+
+                        {isOwner && (
+                          isConfirming ? (
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => {
+                                  onDeleteCalendar(cal.id);
+                                  setDeletingCalId(null);
+                                }}
+                                className="px-2 py-1 text-[10px] font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition cursor-pointer"
+                              >
+                                削除
+                              </button>
+                              <button
+                                onClick={() => setDeletingCalId(null)}
+                                className="px-1.5 py-1 text-[10px] text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
+                              >
+                                取消
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setDeletingCalId(cal.id)}
+                              title="カレンダーを削除"
+                              className="p-2 border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-slate-400 rounded-xl transition cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

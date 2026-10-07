@@ -12,7 +12,7 @@
         "photoURL": { "type": "string", "maxLength": 1024 },
         "createdAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["uid", "email"]
+      "required": ["uid", "username"]
     },
     "Calendar": {
       "title": "Calendar",
@@ -33,7 +33,7 @@
         "createdAt": { "type": "string", "maxLength": 64 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["id", "name", "ownerId", "ownerEmail"]
+      "required": ["id", "name", "ownerId"]
     },
     "CalendarMember": {
       "title": "CalendarMember",
@@ -46,7 +46,7 @@
         "role": { "type": "string", "enum": ["owner", "admin", "member"] },
         "joinedAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["userId", "email", "role"]
+      "required": ["userId", "role"]
     },
     "ScheduleEvent": {
       "title": "ScheduleEvent",
@@ -90,6 +90,28 @@
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["userId", "totalGranted"]
+    },
+    "Memo": {
+      "title": "Memo",
+      "description": "Shared memo or note linked to a calendar or date",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "calendarId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "content": { "type": "string", "maxLength": 10000 },
+        "category": { "type": "string", "maxLength": 50 },
+        "linkedDate": { "type": "string", "maxLength": 30 },
+        "linkedEventId": { "type": "string", "maxLength": 128 },
+        "color": { "type": "string", "maxLength": 30 },
+        "isPinned": { "type": "boolean" },
+        "creatorId": { "type": "string", "maxLength": 128 },
+        "creatorUsername": { "type": "string", "maxLength": 128 },
+        "creatorName": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "calendarId", "title", "creatorId"]
     }
   },
   "firestore": {
@@ -112,6 +134,10 @@
     "/calendars/{calendarId}/paidLeaveBalances/{userId}": {
       "schema": "PaidLeaveBalance",
       "description": "Subcollection of paid leave balances for users in this calendar"
+    },
+    "/calendars/{calendarId}/memos/{memoId}": {
+      "schema": "Memo",
+      "description": "Subcollection of memos and notes shared in this calendar"
     }
   }
 }

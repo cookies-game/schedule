@@ -12,8 +12,14 @@ import {
   CalendarCheck2,
   User as UserIcon,
   Trash2,
+  Eye,
 } from 'lucide-react';
-import { getDisplayUsername } from '../utils/authHelper';
+import {
+  getDisplayUsername,
+  extractUsernameFromEmail,
+  getUserIdentifiers,
+  usernameToEmail,
+} from '../utils/authHelper';
 
 interface PaidLeaveManagerProps {
   calendar: CalendarType;
@@ -39,11 +45,13 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
   onDeleteEvent,
 }) => {
   const currentUsername = getDisplayUsername(currentUser.email, currentUser.displayName);
+  const loginUsername = extractUsernameFromEmail(currentUser.email);
 
   const realIsOwner =
     calendar.ownerId === currentUser.uid ||
     (calendar.ownerEmail && currentUser.email && calendar.ownerEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
-    (calendar.ownerUsername && currentUsername && calendar.ownerUsername.toLowerCase() === currentUsername.toLowerCase());
+    (calendar.ownerUsername && currentUsername && calendar.ownerUsername.toLowerCase() === currentUsername.toLowerCase()) ||
+    (calendar.ownerUsername && loginUsername && calendar.ownerUsername.toLowerCase() === loginUsername.toLowerCase());
 
   const isOwner = isEffectiveAdmin !== undefined ? isEffectiveAdmin : realIsOwner;
 
@@ -69,36 +77,95 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
     ...rawMembers.map((uname) => ({
       id: uname,
       name: uname,
-      email: uname,
+      email: usernameToEmail(uname),
       isOwner: false,
     })),
   ];
 
+  const nonOwnerMembers = members.filter((m) => !m.isOwner);
+  const [perspectiveMemberId, setPerspectiveMemberId] = useState<string>(
+    nonOwnerMembers[0]?.id || members[0]?.id || ''
+  );
+
+  // If admin is previewing in member perspective, evaluate 'you' as the selected member
+  const isPreviewingAsMember = realIsOwner && !isOwner;
+  const viewingTarget = isPreviewingAsMember
+    ? (members.find((m) => m.id === perspectiveMemberId) || nonOwnerMembers[0] || members[0])
+    : {
+        id: currentUser.uid,
+        name: currentUsername,
+        email: currentUser.email || '',
+        isOwner: realIsOwner,
+      };
+
   // Filter paid leave events only
   const paidLeaveEvents = events.filter((e) => e.isPaidLeave);
 
-  // Calculate used days per member (ONLY for the target user taking the leave, NEVER creatorId)
-  const getUsedDays = (memberId: string, memberName: string) => {
+  // Calculate used days per member
+  const getUsedDays = (memberId: string, memberName?: string, memberEmail?: string) => {
+    const rawIdentifiers = getUserIdentifiers(memberId, memberEmail, memberName, memberName);
+    if (memberId) rawIdentifiers.push(memberId.toLowerCase());
+    if (memberName) rawIdentifiers.push(memberName.toLowerCase());
+    if (memberEmail) {
+      rawIdentifiers.push(memberEmail.toLowerCase());
+      const u = extractUsernameFromEmail(memberEmail);
+      if (u) rawIdentifiers.push(u.toLowerCase());
+    }
+
     return paidLeaveEvents
       .filter((e) => {
-        const matchesId = e.targetUserId === memberId;
-        const matchesName =
-          e.targetUserName && memberName && e.targetUserName.toLowerCase() === memberName.toLowerCase();
-        const matchesEmail =
-          e.targetUserEmail && memberName && e.targetUserEmail.toLowerCase() === memberName.toLowerCase();
-        return matchesId || matchesName || matchesEmail;
+        const targetAliases = [
+          e.targetUserId?.toLowerCase(),
+          e.targetUserName?.toLowerCase(),
+          e.targetUserEmail?.toLowerCase(),
+          extractUsernameFromEmail(e.targetUserEmail)?.toLowerCase(),
+        ].filter(Boolean);
+
+        return rawIdentifiers.some((id) => targetAliases.includes(id));
       })
       .reduce((acc, curr) => acc + (curr.paidLeaveDays || 1), 0);
   };
 
-  // Get granted days per member (default 20 if not set)
-  const getGrantedDays = (memberId: string) => {
-    return balances[memberId]?.totalGranted ?? 20;
+  // Get granted days per member (checks UID, username, email, or matches in balance collection)
+  const getGrantedDays = (memberId: string, memberName?: string, memberEmail?: string) => {
+    const rawIdentifiers = getUserIdentifiers(memberId, memberEmail, memberName, memberName);
+    if (memberId) rawIdentifiers.push(memberId.toLowerCase());
+    if (memberName) rawIdentifiers.push(memberName.toLowerCase());
+    if (memberEmail) {
+      rawIdentifiers.push(memberEmail.toLowerCase());
+      const uFromEmail = extractUsernameFromEmail(memberEmail);
+      if (uFromEmail) rawIdentifiers.push(uFromEmail.toLowerCase());
+    }
+
+    // 1. Direct key match
+    for (const key of rawIdentifiers) {
+      if (balances[key]?.totalGranted !== undefined) {
+        return balances[key].totalGranted;
+      }
+    }
+
+    // 2. Case-insensitive search through all balance documents
+    for (const b of Object.values(balances)) {
+      if (b.totalGranted !== undefined) {
+        const bAliases = [
+          b.userId?.toLowerCase(),
+          b.userName?.toLowerCase(),
+          b.userEmail?.toLowerCase(),
+          extractUsernameFromEmail(b.userEmail)?.toLowerCase(),
+        ].filter(Boolean);
+
+        if (rawIdentifiers.some((id) => bAliases.includes(id))) {
+          return b.totalGranted;
+        }
+      }
+    }
+
+    return 20; // default only if never set
   };
 
-  // Current user's stats
-  const myUsed = getUsedDays(currentUser.uid, currentUsername);
-  const myGranted = getGrantedDays(currentUser.uid);
+  // Evaluated user's stats
+  const myUsed = getUsedDays(viewingTarget.id, viewingTarget.name, viewingTarget.email);
+  const myGranted = getGrantedDays(viewingTarget.id, viewingTarget.name, viewingTarget.email);
   const myRemaining = Math.max(0, myGranted - myUsed);
   const myUsageRate = myGranted > 0 ? Math.round((myUsed / myGranted) * 100) : 0;
 
@@ -139,10 +206,33 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-semibold text-emerald-100 flex items-center gap-1.5">
                 <Palmtree className="w-4 h-4" />
-                あなたの有給残数
+                {isPreviewingAsMember ? `${viewingTarget.name}さんの有給残数` : 'あなたの有給残数'}
               </span>
-              <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-medium">個人</span>
+              <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-medium">
+                {isPreviewingAsMember ? '目線プレビュー' : '個人'}
+              </span>
             </div>
+
+            {isPreviewingAsMember && nonOwnerMembers.length > 0 && (
+              <div className="mb-2.5">
+                <div className="flex items-center gap-1 text-[10px] text-emerald-100 mb-1">
+                  <Eye className="w-3 h-3" />
+                  <span>プレビュー対象メンバー:</span>
+                </div>
+                <select
+                  value={perspectiveMemberId}
+                  onChange={(e) => setPerspectiveMemberId(e.target.value)}
+                  className="w-full text-xs bg-white/20 text-white rounded-lg px-2 py-1 border border-white/30 focus:outline-none focus:bg-emerald-800"
+                >
+                  {nonOwnerMembers.map((m) => (
+                    <option key={m.id} value={m.id} className="text-slate-800">
+                      @{m.name} の視点
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="flex items-baseline gap-2 mb-2">
               <span className="text-4xl font-extrabold">{myRemaining}</span>
               <span className="text-sm font-semibold text-emerald-100">日</span>
@@ -158,7 +248,9 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
         <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-500">あなたの有給消化率</span>
+              <span className="text-xs font-semibold text-slate-500">
+                {isPreviewingAsMember ? `${viewingTarget.name}さんの有給消化率` : 'あなたの有給消化率'}
+              </span>
               <span className="text-xs font-bold text-slate-700">{myUsageRate}%</span>
             </div>
             <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden mb-3">
@@ -169,7 +261,7 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
             </div>
           </div>
           <button
-            onClick={() => onOpenNewLeaveModal(currentUser.uid, currentUsername, currentUser.email || undefined)}
+            onClick={() => onOpenNewLeaveModal(viewingTarget.id, viewingTarget.name, viewingTarget.email || undefined)}
             className="w-full py-2 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -257,13 +349,17 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
             <tbody className="divide-y divide-slate-100">
               {members.map((member) => {
                 const used = getUsedDays(member.id, member.name);
-                const granted = getGrantedDays(member.id);
+                const granted = getGrantedDays(member.id, member.name, member.email);
                 const remaining = Math.max(0, granted - used);
                 const isEditing = editingUserId === member.id;
                 const isCurrent =
+                  member.id === viewingTarget.id ||
+                  member.name.toLowerCase() === viewingTarget.name.toLowerCase() ||
+                  (viewingTarget.email && member.email.toLowerCase() === viewingTarget.email.toLowerCase()) ||
                   member.id === currentUser.uid ||
                   member.name.toLowerCase() === currentUsername.toLowerCase() ||
-                  member.email.toLowerCase() === currentUser.email?.toLowerCase();
+                  (loginUsername && member.name.toLowerCase() === loginUsername.toLowerCase()) ||
+                  (currentUser.email && member.email.toLowerCase() === currentUser.email.toLowerCase());
 
                 return (
                   <tr key={member.id} className="hover:bg-slate-50/70 transition">

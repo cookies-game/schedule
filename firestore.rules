@@ -41,6 +41,7 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isSignedIn();
       allow write: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if isSignedIn() && request.auth.uid == userId;
     }
 
     // Calendars
@@ -88,7 +89,6 @@ service cloud.firestore {
       match /events/{eventId} {
         allow read: if isCalendarMember(calendarId);
 
-        // Calendar creator (admin) can create for anyone. Non-admin can only create for themselves.
         allow create: if isCalendarMember(calendarId) && (
           isCalendarOwner(calendarId) ||
           request.resource.data.targetUserId == request.auth.uid ||
@@ -99,8 +99,6 @@ service cloud.firestore {
           ))
         );
 
-        // Calendar creator (admin) can update/delete any event.
-        // Non-admin can ONLY update/delete their own event.
         allow update: if isCalendarMember(calendarId) && (
           isCalendarOwner(calendarId) ||
           resource.data.targetUserId == request.auth.uid ||
@@ -125,12 +123,32 @@ service cloud.firestore {
       // Paid leave balance subcollection
       match /paidLeaveBalances/{targetUserId} {
         allow read: if isCalendarMember(calendarId);
-        // Calendar creator can manage all balances; user can update their own used days
         allow write: if isCalendarMember(calendarId) && (
           isCalendarOwner(calendarId) ||
           request.auth.uid == targetUserId
         );
       }
+
+      // Shared Memos subcollection
+      match /memos/{memoId} {
+        allow read: if isCalendarMember(calendarId);
+        allow create: if isCalendarMember(calendarId);
+        allow update, delete: if isCalendarMember(calendarId) && (
+          isCalendarOwner(calendarId) ||
+          resource.data.creatorId == request.auth.uid
+        );
+      }
+    }
+
+    // Top-level Memos collection (collaborative notes shared with accounts and calendars)
+    match /memos/{memoId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isSignedIn() && (
+        resource.data.creatorId == request.auth.uid ||
+        (request.auth.token.email != null && resource.data.creatorEmail == request.auth.token.email)
+      );
     }
   }
 }

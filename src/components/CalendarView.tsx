@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import { Calendar as CalendarType, ScheduleEvent, PaidLeaveBalance } from '../types';
+import { Calendar as CalendarType, ScheduleEvent, PaidLeaveBalance, Memo } from '../types';
 import {
   ChevronLeft,
   ChevronRight,
@@ -13,19 +13,25 @@ import {
   Lock,
   Eye,
   RotateCcw,
+  FileText,
 } from 'lucide-react';
 import { PaidLeaveManager } from './PaidLeaveManager';
-import { getDisplayUsername } from '../utils/authHelper';
+import { MemoList } from './MemoList';
+import { getDisplayUsername, extractUsernameFromEmail } from '../utils/authHelper';
 
 interface CalendarViewProps {
   calendar: CalendarType;
   currentUser: User;
   events: ScheduleEvent[];
   balances: Record<string, PaidLeaveBalance>;
+  memos?: Memo[];
   isMemberPerspective?: boolean;
   onTogglePerspective?: () => void;
   onOpenNewEvent: (initialDate?: string) => void;
   onOpenNewLeave: (targetUserId?: string, targetUserName?: string, targetUserEmail?: string) => void;
+  onOpenNewMemo?: (initialDate?: string) => void;
+  onEditMemo?: (memo: Memo) => void;
+  onDeleteMemo?: (memoId: string) => Promise<void>;
   onOpenShare: () => void;
   onSelectEvent: (event: ScheduleEvent) => void;
   onDeleteEvent?: (eventId: string) => Promise<void>;
@@ -37,16 +43,22 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   currentUser,
   events,
   balances,
+  memos = [],
   isMemberPerspective = false,
   onTogglePerspective,
   onOpenNewEvent,
   onOpenNewLeave,
+  onOpenNewMemo,
+  onEditMemo,
+  onDeleteMemo,
   onOpenShare,
   onSelectEvent,
   onDeleteEvent,
   onUpdateGrant,
 }) => {
-  const currentUsername = getDisplayUsername(currentUser.email, currentUser.displayName);
+  const currentUsername =
+    extractUsernameFromEmail(currentUser.email) ||
+    getDisplayUsername(currentUser.email, currentUser.displayName);
 
   // Real owner check
   const isRealOwner = Boolean(
@@ -58,8 +70,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   // Effective permissions: if member perspective is active, behave strictly as member
   const effectiveIsOwner = Boolean(isRealOwner && !isMemberPerspective);
 
-  // Tab view: 'month' | 'paid_leave' | 'members'
-  const [currentTab, setCurrentTab] = useState<'month' | 'paid_leave' | 'members'>('month');
+  // Tab view: 'month' | 'paid_leave' | 'members' | 'memos'
+  const [currentTab, setCurrentTab] = useState<'month' | 'paid_leave' | 'members' | 'memos'>('month');
 
   // Month navigation state
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
@@ -138,6 +150,15 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     return events.filter((e) => {
       return dateStr >= e.startDate && dateStr <= e.endDate;
     });
+  };
+
+  // Memos linked to this calendar or date
+  const calendarMemos = memos.filter(
+    (m) => !m.linkedCalendarId || m.linkedCalendarId === calendar.id || m.calendarId === calendar.id
+  );
+
+  const getMemosForDate = (dateStr: string) => {
+    return calendarMemos.filter((m) => m.linkedDate === dateStr);
   };
 
   const dayOfWeekNames = ['日', '月', '火', '水', '木', '金', '土'];
@@ -278,10 +299,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         </div>
 
         {/* View Tabs */}
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
           <button
             onClick={() => setCurrentTab('month')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
               currentTab === 'month'
                 ? 'bg-white text-slate-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -292,7 +313,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </button>
           <button
             onClick={() => setCurrentTab('paid_leave')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
               currentTab === 'paid_leave'
                 ? 'bg-white text-emerald-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -303,7 +324,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </button>
           <button
             onClick={() => setCurrentTab('members')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
               currentTab === 'members'
                 ? 'bg-white text-slate-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -312,10 +333,29 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             <Users className="w-3.5 h-3.5" />
             <span>メンバー別一覧</span>
           </button>
+          <button
+            onClick={() => setCurrentTab('memos')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+              currentTab === 'memos'
+                ? 'bg-white text-indigo-800 shadow-xs'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5 text-indigo-600" />
+            <span>連携メモ ({calendarMemos.length})</span>
+          </button>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => onOpenNewMemo && onOpenNewMemo()}
+            className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition cursor-pointer"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>メモを追加</span>
+          </button>
+
           <button
             onClick={() => onOpenNewLeave()}
             className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-semibold rounded-xl transition cursor-pointer"
@@ -355,6 +395,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-100 min-h-[600px]">
             {calendarDays.map((calDay, i) => {
               const dayEvents = getEventsForDate(calDay.dateStr);
+              const dayMemos = getMemosForDate(calDay.dateStr);
               const isWeekend = i % 7 === 0 || i % 7 === 6;
 
               return (
@@ -386,20 +427,50 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       {calDay.dayNumber}
                     </span>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenNewEvent(calDay.dateStr);
-                      }}
-                      title="この日に予定を追加"
-                      className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onOpenNewMemo) onOpenNewMemo(calDay.dateStr);
+                        }}
+                        title="この日にメモを追加"
+                        className="p-0.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
+                      >
+                        <FileText className="w-3 h-3" />
+                      </button>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenNewEvent(calDay.dateStr);
+                        }}
+                        title="この日に予定を追加"
+                        className="p-0.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Events inside this cell */}
+                  {/* Items inside this cell: Linked Memos + Events */}
                   <div className="space-y-1 overflow-y-auto max-h-24 flex-1">
+                    {/* Linked Memos for this day */}
+                    {dayMemos.map((memo) => (
+                      <div
+                        key={memo.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onEditMemo) onEditMemo(memo);
+                        }}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-900 border border-indigo-200 hover:bg-indigo-100 transition flex items-center gap-1 shadow-2xs truncate cursor-pointer"
+                        title={`[連携メモ] ${memo.title}`}
+                      >
+                        <FileText className="w-2.5 h-2.5 text-indigo-600 shrink-0" />
+                        <span className="truncate">{memo.title}</span>
+                      </div>
+                    ))}
+
+                    {/* Schedule Events & Paid Leave */}
                     {dayEvents.map((ev) => {
                       if (ev.isPaidLeave) {
                         return (
@@ -577,6 +648,39 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Tab 4: Linked Memos */}
+      {currentTab === 'memos' && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-indigo-600" />
+                カレンダー連携メモ・共有ノート
+              </h2>
+              <p className="text-xs text-slate-400">
+                このカレンダー「{calendar.name}」に関連するメモ一覧
+              </p>
+            </div>
+            <button
+              onClick={() => onOpenNewMemo && onOpenNewMemo()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>このカレンダーにメモを作成</span>
+            </button>
+          </div>
+
+          <MemoList
+            user={currentUser}
+            memos={calendarMemos}
+            currentCalendar={calendar}
+            onOpenCreateMemo={onOpenNewMemo || (() => {})}
+            onEditMemo={onEditMemo || (() => {})}
+            onDeleteMemo={onDeleteMemo || (async () => {})}
+          />
         </div>
       )}
     </div>
