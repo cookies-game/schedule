@@ -45,6 +45,7 @@ export interface ScheduleEvent {
   isAllDay: boolean;
   isPaidLeave: boolean; // 有給かどうか
   paidLeaveDays: number; // 1 or 0.5
+  isImportant?: boolean; // 重要タグ
   creatorId: string;
   creatorName: string;
   creatorEmail: string;

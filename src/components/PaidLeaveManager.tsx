@@ -19,6 +19,8 @@ import {
   extractUsernameFromEmail,
   getUserIdentifiers,
   usernameToEmail,
+  calculateUserLeaveStats,
+  formatDateToYYYYMMDD,
 } from '../utils/authHelper';
 
 interface PaidLeaveManagerProps {
@@ -163,15 +165,27 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
     return 20; // default only if never set
   };
 
+  const [showPastLeaves, setShowPastLeaves] = useState(false);
+  const todayStr = formatDateToYYYYMMDD(new Date());
+
   // Evaluated user's stats
-  const myUsed = getUsedDays(viewingTarget.id, viewingTarget.name, viewingTarget.email);
-  const myGranted = getGrantedDays(viewingTarget.id, viewingTarget.name, viewingTarget.email);
-  const myRemaining = Math.max(0, myGranted - myUsed);
+  const viewingStats = calculateUserLeaveStats(
+    viewingTarget.id,
+    viewingTarget.name,
+    viewingTarget.email,
+    events,
+    balances
+  );
+  const myUsed = viewingStats.used;
+  const myGranted = viewingStats.granted;
+  const myRemaining = viewingStats.remaining;
   const myUsageRate = myGranted > 0 ? Math.round((myUsed / myGranted) * 100) : 0;
 
   // Sorted upcoming paid leave list
   const sortedLeaves = [...paidLeaveEvents].sort((a, b) => a.startDate.localeCompare(b.startDate));
   const filteredLeaves = sortedLeaves.filter((l) => {
+    // 日付が過ぎた有給は自動で非表示 (有給残数は減ったまま保持される)
+    if (!showPastLeaves && l.endDate < todayStr) return false;
     if (filterMember === 'all') return true;
     return (
       l.targetUserId === filterMember ||
@@ -348,9 +362,16 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {members.map((member) => {
-                const used = getUsedDays(member.id, member.name);
-                const granted = getGrantedDays(member.id, member.name, member.email);
-                const remaining = Math.max(0, granted - used);
+                const memberStats = calculateUserLeaveStats(
+                  member.id,
+                  member.name,
+                  member.email,
+                  events,
+                  balances
+                );
+                const used = memberStats.used;
+                const granted = memberStats.granted;
+                const remaining = memberStats.remaining;
                 const isEditing = editingUserId === member.id;
                 const isCurrent =
                   member.id === viewingTarget.id ||
@@ -473,25 +494,39 @@ export const PaidLeaveManager: React.FC<PaidLeaveManagerProps> = ({
           <div>
             <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
               <CalendarIcon className="w-4 h-4 text-indigo-600" />
-              有給休暇の取得予定・履歴一覧 (誰が何月何日に取得するか)
+              有給休暇の取得予定・履歴一覧
             </h2>
-            <p className="text-xs text-slate-400">チームメンバー全員の有給スケジュール</p>
+            <p className="text-xs text-slate-400">
+              ※有給を設定した日が過ぎると自動で非表示になります（有給残数は減ったまま保持されます）
+            </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-medium">絞り込み:</span>
-            <select
-              value={filterMember}
-              onChange={(e) => setFilterMember(e.target.value)}
-              className="px-2.5 py-1 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-            >
-              <option value="all">全員の有給</option>
-              {members.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer select-none bg-slate-50 hover:bg-slate-100 px-2.5 py-1 rounded-xl border border-slate-200 transition">
+              <input
+                type="checkbox"
+                checked={showPastLeaves}
+                onChange={(e) => setShowPastLeaves(e.target.checked)}
+                className="w-3.5 h-3.5 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500"
+              />
+              <span>過去の有給履歴も表示</span>
+            </label>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-500 font-medium">絞り込み:</span>
+              <select
+                value={filterMember}
+                onChange={(e) => setFilterMember(e.target.value)}
+                className="px-2.5 py-1 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              >
+                <option value="all">全員の有給</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 

@@ -14,10 +14,11 @@ import {
   Eye,
   RotateCcw,
   FileText,
+  Star,
 } from 'lucide-react';
 import { PaidLeaveManager } from './PaidLeaveManager';
 import { MemoList } from './MemoList';
-import { getDisplayUsername, extractUsernameFromEmail } from '../utils/authHelper';
+import { getDisplayUsername, extractUsernameFromEmail, formatDateToYYYYMMDD } from '../utils/authHelper';
 
 interface CalendarViewProps {
   calendar: CalendarType;
@@ -103,13 +104,13 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     isToday: boolean;
   }[] = [];
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = formatDateToYYYYMMDD(new Date());
 
   // Previous month trailing days
   for (let i = firstDayOfMonth - 1; i >= 0; i--) {
     const day = daysInPrevMonth - i;
     const prevMonthDate = new Date(year, month - 1, day);
-    const dateStr = prevMonthDate.toISOString().split('T')[0];
+    const dateStr = formatDateToYYYYMMDD(prevMonthDate);
     calendarDays.push({
       dayNumber: day,
       dateStr,
@@ -121,9 +122,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   // Current month days
   for (let day = 1; day <= daysInMonth; day++) {
     const curDate = new Date(year, month, day);
-    const mStr = String(month + 1).padStart(2, '0');
-    const dStr = String(day).padStart(2, '0');
-    const dateStr = `${year}-${mStr}-${dStr}`;
+    const dateStr = formatDateToYYYYMMDD(curDate);
     calendarDays.push({
       dayNumber: day,
       dateStr,
@@ -136,7 +135,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const remainingCells = (7 - (calendarDays.length % 7)) % 7;
   for (let day = 1; day <= remainingCells; day++) {
     const nextMonthDate = new Date(year, month + 1, day);
-    const dateStr = nextMonthDate.toISOString().split('T')[0];
+    const dateStr = formatDateToYYYYMMDD(nextMonthDate);
     calendarDays.push({
       dayNumber: day,
       dateStr,
@@ -148,6 +147,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   // Events grouped by date string
   const getEventsForDate = (dateStr: string) => {
     return events.filter((e) => {
+      // 有給を設定した日が過ぎたら表示は消す (過去の日付の有給は非表示)
+      if (e.isPaidLeave && (e.endDate < todayStr || dateStr < todayStr)) {
+        return false;
+      }
       return dateStr >= e.startDate && dateStr <= e.endDate;
     });
   };
@@ -397,17 +400,26 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               const dayEvents = getEventsForDate(calDay.dateStr);
               const dayMemos = getMemosForDate(calDay.dateStr);
               const isWeekend = i % 7 === 0 || i % 7 === 6;
+              const isPastDay = calDay.dateStr < todayStr;
 
               return (
                 <div
-                  key={calDay.dateStr}
-                  onClick={() => onOpenNewEvent(calDay.dateStr)}
-                  className={`min-h-[110px] p-1.5 sm:p-2 transition group flex flex-col justify-between cursor-pointer ${
+                  key={`${calDay.dateStr}-${i}`}
+                  onClick={() => {
+                    if (!isPastDay) {
+                      onOpenNewEvent(calDay.dateStr);
+                    }
+                  }}
+                  className={`min-h-[110px] p-1.5 sm:p-2 transition group flex flex-col justify-between ${
+                    isPastDay
+                      ? 'cursor-default bg-slate-50/40 text-slate-400'
+                      : 'cursor-pointer hover:bg-slate-50/80'
+                  } ${
                     !calDay.isCurrentMonth
                       ? 'bg-slate-50/50 text-slate-300'
                       : isWeekend
                       ? 'bg-slate-50/20'
-                      : 'hover:bg-slate-50/80'
+                      : ''
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
@@ -420,6 +432,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             ? 'text-rose-500'
                             : i % 7 === 6
                             ? 'text-sky-600'
+                            : isPastDay
+                            ? 'text-slate-400'
                             : 'text-slate-700'
                           : 'text-slate-300'
                       }`}
@@ -439,16 +453,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         <FileText className="w-3 h-3" />
                       </button>
 
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOpenNewEvent(calDay.dateStr);
-                        }}
-                        title="この日に予定を追加"
-                        className="p-0.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </button>
+                      {!isPastDay && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenNewEvent(calDay.dateStr);
+                          }}
+                          title="この日に予定を追加"
+                          className="p-0.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -503,13 +519,20 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             borderLeftColor: ev.color || '#4f46e5',
                             backgroundColor: `${ev.color || '#4f46e5'}15`,
                           }}
-                          className="px-1.5 py-0.5 rounded text-[10px] font-medium text-slate-800 border-l-2 hover:opacity-85 transition truncate shadow-2xs"
-                          title={`${ev.title} (${ev.targetUserName})`}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-medium text-slate-800 border-l-2 hover:opacity-85 transition truncate shadow-2xs flex items-center justify-between gap-1 ${
+                            ev.isImportant ? 'ring-1 ring-amber-400 bg-amber-50/60' : ''
+                          }`}
+                          title={`${ev.isImportant ? '[重要] ' : ''}${ev.title} (${ev.targetUserName})`}
                         >
-                          <span className="font-semibold text-slate-600 mr-1">
-                            {ev.targetUserName.slice(0, 3)}:
-                          </span>
-                          <span>{ev.title}</span>
+                          <div className="flex items-center gap-0.5 truncate">
+                            {ev.isImportant && (
+                              <Star className="w-2.5 h-2.5 text-amber-500 fill-amber-500 shrink-0" />
+                            )}
+                            <span className="font-semibold text-slate-600 mr-0.5">
+                              {ev.targetUserName.slice(0, 3)}:
+                            </span>
+                            <span className="truncate">{ev.title}</span>
+                          </div>
                         </div>
                       );
                     })}
@@ -552,10 +575,17 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           <div className="space-y-6">
             {members.map((member) => {
               const memberEvents = events.filter(
-                (e) =>
-                  e.targetUserId === member.id ||
-                  (e.targetUserName && e.targetUserName.toLowerCase() === member.name.toLowerCase()) ||
-                  (e.targetUserEmail && e.targetUserEmail.toLowerCase() === member.email.toLowerCase())
+                (e) => {
+                  // 有給を設定した日が過ぎたら表示は消す
+                  if (e.isPaidLeave && e.endDate < todayStr) {
+                    return false;
+                  }
+                  return (
+                    e.targetUserId === member.id ||
+                    (e.targetUserName && e.targetUserName.toLowerCase() === member.name.toLowerCase()) ||
+                    (e.targetUserEmail && e.targetUserEmail.toLowerCase() === member.email.toLowerCase())
+                  );
+                }
               );
               const isCurrent =
                 member.id === currentUser.uid ||
@@ -612,10 +642,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         >
                           <div>
                             <div className="flex items-center justify-between mb-1.5">
-                              <span className="text-[11px] font-bold text-slate-500">
-                                {ev.startDate}
-                                {ev.endDate !== ev.startDate && ` 〜 ${ev.endDate}`}
-                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] font-bold text-slate-500">
+                                  {ev.startDate}
+                                  {ev.endDate !== ev.startDate && ` 〜 ${ev.endDate}`}
+                                </span>
+                                {ev.isImportant && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-500 text-white shadow-2xs">
+                                    <Star className="w-2.5 h-2.5 fill-white" />
+                                    重要
+                                  </span>
+                                )}
+                              </div>
                               {ev.isPaidLeave && (
                                 <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-600 text-white">
                                   <Palmtree className="w-2.5 h-2.5" />

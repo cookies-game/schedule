@@ -10,7 +10,13 @@ import {
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, cleanFirestoreData, OperationType } from './firebase';
 import { Calendar as CalendarType, ScheduleEvent, PaidLeaveBalance, Memo, UserProfile } from './types';
-import { usernameToEmail, getDisplayUsername, extractUsernameFromEmail } from './utils/authHelper';
+import {
+  usernameToEmail,
+  getDisplayUsername,
+  extractUsernameFromEmail,
+  calculateUserLeaveStats,
+  formatDateToYYYYMMDD,
+} from './utils/authHelper';
 import { Navbar } from './components/Navbar';
 import { CalendarList } from './components/CalendarList';
 import { CalendarView } from './components/CalendarView';
@@ -46,6 +52,10 @@ export const App: React.FC = () => {
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<ScheduleEvent | null>(null);
   const [initialEventDate, setInitialEventDate] = useState<string | undefined>(undefined);
+  const [isInitialPaidLeave, setIsInitialPaidLeave] = useState<boolean>(false);
+  const [initialTargetUser, setInitialTargetUser] = useState<
+    { id: string; name: string; email: string } | undefined
+  >(undefined);
 
   // Memo Modal state
   const [isMemoModalOpen, setIsMemoModalOpen] = useState(false);
@@ -178,6 +188,7 @@ export const App: React.FC = () => {
             isAllDay: data.isAllDay ?? true,
             isPaidLeave: data.isPaidLeave ?? false,
             paidLeaveDays: data.paidLeaveDays ?? 1,
+            isImportant: data.isImportant ?? false,
             creatorId: data.creatorId || '',
             creatorName: data.creatorName || '',
             creatorEmail: data.creatorEmail || '',
@@ -415,6 +426,31 @@ export const App: React.FC = () => {
   ) => {
     if (!currentCalendarId || !currentUser) return;
 
+    // Disallow setting schedule on days before today
+    const todayStr = formatDateToYYYYMMDD(new Date());
+    if (eventData.startDate < todayStr) {
+      throw new Error('今日より前の日付にはスケジュールを設定できません。');
+    }
+
+    // Enforce paid leave balance limit
+    if (eventData.isPaidLeave) {
+      const targetUserStats = calculateUserLeaveStats(
+        eventData.targetUserId,
+        eventData.targetUserName,
+        eventData.targetUserEmail,
+        events,
+        balances,
+        selectedEvent?.id // Exclude the event currently being edited
+      );
+
+      const requestedDays = eventData.paidLeaveDays || 1;
+      if (requestedDays > targetUserStats.remaining) {
+        throw new Error(
+          `有給休暇の残日数が不足しています。（残り: ${targetUserStats.remaining}日 / 申請: ${requestedDays}日）`
+        );
+      }
+    }
+
     if (selectedEvent) {
       const eventPath = `calendars/${currentCalendarId}/events/${selectedEvent.id}`;
       try {
@@ -649,13 +685,28 @@ export const App: React.FC = () => {
             isMemberPerspective={isMemberPerspective}
             onTogglePerspective={() => setIsMemberPerspective(!isMemberPerspective)}
             onOpenNewEvent={(initialDate) => {
+              const todayStr = formatDateToYYYYMMDD(new Date());
+              const validDate = initialDate && initialDate >= todayStr ? initialDate : todayStr;
               setSelectedEvent(null);
-              setInitialEventDate(initialDate);
+              setInitialEventDate(validDate);
+              setIsInitialPaidLeave(false);
+              setInitialTargetUser(undefined);
               setIsEventModalOpen(true);
             }}
             onOpenNewLeave={(targetUserId, targetUserName, targetUserEmail) => {
+              const todayStr = formatDateToYYYYMMDD(new Date());
               setSelectedEvent(null);
-              setInitialEventDate(new Date().toISOString().split('T')[0]);
+              setInitialEventDate(todayStr);
+              setIsInitialPaidLeave(true);
+              if (targetUserId && targetUserName) {
+                setInitialTargetUser({
+                  id: targetUserId,
+                  name: targetUserName,
+                  email: targetUserEmail || '',
+                });
+              } else {
+                setInitialTargetUser(undefined);
+              }
               setIsEventModalOpen(true);
             }}
             onOpenNewMemo={(initialDate) => {
@@ -671,6 +722,7 @@ export const App: React.FC = () => {
             onOpenShare={() => setIsShareOpen(true)}
             onSelectEvent={(event) => {
               setSelectedEvent(event);
+              setIsInitialPaidLeave(event.isPaidLeave);
               setIsEventModalOpen(true);
             }}
             onDeleteEvent={handleDeleteEvent}
@@ -764,11 +816,17 @@ export const App: React.FC = () => {
                   setIsEventModalOpen(false);
                   setSelectedEvent(null);
                   setInitialEventDate(undefined);
+                  setIsInitialPaidLeave(false);
+                  setInitialTargetUser(undefined);
                 }}
                 event={selectedEvent}
                 initialDate={initialEventDate}
+                isInitialPaidLeave={isInitialPaidLeave}
+                initialTargetUser={initialTargetUser}
                 calendar={currentCalendar}
                 currentUser={currentUser}
+                events={events}
+                balances={balances}
                 isEffectiveAdmin={
                   Boolean(
                     (currentCalendar.ownerId === currentUser.uid ||
